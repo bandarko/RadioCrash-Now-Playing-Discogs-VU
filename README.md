@@ -48,11 +48,13 @@ The production setup confirmed by the owner and the supplied screenshot uses **R
 
 The production `Discogs` snippet serves all three clients: Android, iOS, and this web frontend. On the website it supplies cover artwork and release information for the Now Playing display. The production `Android RC app last 10 songs` snippet supplies song history to both mobile apps. These consumers were verified directly in the Android, iOS, and web source.
 
-The [Reactions repository](https://github.com/bandarko/RadioCrash-Reactions-WordPress) also contains later additions labelled 0.4.7 that place `/discogs` and `/history` inside the plugin source. Those additions preserve the existing reactions implementation. The installed production layout remains version 0.4.5 with the two separate active snippets shown above.
+The [Reactions repository](https://github.com/bandarko/RadioCrash-Reactions-WordPress) contains the actual production plugin version 0.4.5. `/discogs` and `/history` remain separate Code Snippets, matching the installed production layout.
 
 ## Production source policy
 
 Production PHP, JavaScript and CSS are kept without formatting-only cleanup or modernization. Documentation such as this README may be improved independently. Functional source changes should be deliberate and tested against the live Radio Crash integration.
+
+Whenever one of these production records changes, copy the functionally equivalent source to this repository in the same maintenance task and commit it. Keep credentials outside GitHub; a sanitized source may obtain the same value from an environment variable or `wp-config.php` constant.
 
 ## Security
 
