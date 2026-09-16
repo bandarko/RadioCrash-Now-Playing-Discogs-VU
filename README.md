@@ -42,11 +42,11 @@ Update the corresponding existing records. The PHP file is a Code Snippets body,
 
 ### Relationship to Radio Crash Reactions
 
-The production setup confirmed by the owner and the supplied screenshot uses **Radio Crash Reactions 0.4.5** together with the active **`Discogs`** and **`Android RC app last 10 songs`** PHP snippets. These snippets remain separate from the production Reactions plugin.
+The production setup confirmed by the owner and the supplied screenshot uses **Radio Crash Reactions 0.4.5** together with the active **`Discogs`** and **`Android RC app last 10 songs`** PHP snippets.
 
-The [Reactions repository](https://github.com/bandarko/RadioCrash-Reactions-WordPress) contains later changes labelled 0.4.7 that add `/discogs` and `/history` to the plugin. Those changes are not the production reference or an approved upgrade. Do not deploy that version or disable the active production snippets based on the GitHub version number. This repository's frontend still calls `/wp-json/rc/v1/discogs`, provided by the production `Discogs` snippet.
+The production `Discogs` snippet serves all three clients: Android, iOS, and this web frontend. On the website it supplies cover artwork and release information for the Now Playing display. The production `Android RC app last 10 songs` snippet supplies song history to both mobile apps.
 
-The history snippet is a separate component and is not included in this repository. Its full source cannot be established from the snippet-list screenshot.
+The [Reactions repository](https://github.com/bandarko/RadioCrash-Reactions-WordPress) also contains later additions labelled 0.4.7 that place `/discogs` and `/history` inside the plugin source. Those additions preserve the existing reactions implementation. The installed production layout remains version 0.4.5 with the two separate active snippets shown above.
 
 ## Production source policy
 
