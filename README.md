@@ -1,32 +1,43 @@
 # RadioCrash — Now Playing + Discogs + VU
 
-Production WordPress frontend module used by Radio Crash for the **Now Playing** display, Discogs metadata/artwork integration and the desktop VU meter.
+Production WordPress frontend system used by **Radio Crash** for the **Now Playing** display, Discogs metadata/artwork integration and the desktop VU meter.
 
-These three parts are intentionally maintained as **one project** because they form one functional component on the Radio Crash website.
+These parts intentionally live in **one repository** because on `radiocrash.net` they form one functional component rather than three independent projects.
 
-## Components
+## Repository structure
 
-- `now-playing-discogs-vu.js` — frontend logic: current track polling, metadata handling and VU behaviour.
-- `now-playing-discogs-vu.css` — production styling for the combined component.
-- `discogs-proxy.php` — WordPress/PHP proxy used for Discogs requests.
+```text
+.
+├── README.md
+├── discogs-proxy.php             # WordPress REST proxy for Discogs
+├── now-playing-discogs-vu.js     # Now Playing, metadata and VU frontend logic
+└── now-playing-discogs-vu.css    # Production styling
+```
 
-## WordPress integration
+## WordPress origin
 
-The JavaScript and CSS originate from the production WordPress Custom CSS/JS implementation. The PHP file originates from the production Discogs Code Snippet.
+The JavaScript and CSS were recovered from the production WordPress Custom CSS/JS implementation **Svira sada + Discogs + VU**. The PHP endpoint was recovered from the production **Discogs** Code Snippet.
 
-## Configuration
+## Discogs proxy
 
-The Discogs access token is **not stored in this repository**. The sanitized PHP source expects it from the `RC_DISCOGS_TOKEN` environment variable.
+The browser talks to the Radio Crash WordPress REST endpoint rather than directly exposing the Discogs credential. The repository version expects the Discogs token through the `RC_DISCOGS_TOKEN` environment variable.
 
-## Source integrity
+No API token belongs in Git history.
 
-Production source files in this repository are preserved byte-for-byte from the recovered Radio Crash source. Formatting, whitespace and legacy implementation details are intentionally retained so this repository can serve as an exact source archive as well as the maintenance repository.
+## VU meter
+
+The VU meter in this repository is the production VU implementation that belongs to the Now Playing system. It is not the old `RC VU Test Detector` diagnostic snippet.
+
+## Production source policy
+
+Production PHP, JavaScript and CSS are kept without formatting-only cleanup or modernization. Documentation such as this README may be improved independently. Functional source changes should be deliberate and tested against the live Radio Crash integration.
 
 ## Security
 
-Do not commit API tokens, WordPress backups, SQL dumps, credentials or runtime data.
+Never commit Discogs tokens, WordPress credentials, SQL/database dumps, backups, runtime caches or other secrets.
 
-## Project
+## Radio Crash
 
-Radio Crash — independent internet radio project.  
-Website: `radiocrash.net`
+Independent internet radio project, online since 2011 with roots going back to 1986.
+
+**Website:** `radiocrash.net`
