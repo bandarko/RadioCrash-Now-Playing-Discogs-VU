@@ -1,58 +1,76 @@
-<?php
-/**
- * Radio Crash Discogs proxy.
- * The Discogs token is read from RC_DISCOGS_TOKEN and is never exposed to the browser.
- */
-
 add_action('rest_api_init', function () {
-    register_rest_route('rc/v1', '/discogs', [
-        'methods' => 'GET',
-        'permission_callback' => '__return_true',
-        'callback' => function (WP_REST_Request $request) {
-            $artist = sanitize_text_field((string) $request->get_param('artist'));
-            $title  = sanitize_text_field((string) $request->get_param('title'));
-            $type   = sanitize_text_field((string) $request->get_param('type')) ?: 'release';
 
-            if ($artist === '' || $title === '') {
-                return new WP_REST_Response(['ok' => false, 'error' => 'missing_query'], 400);
-            }
+  // TEST ruta (da odmah znamo radi li)
+  register_rest_route('rc/v1', '/ping', [
+    'methods'  => 'GET',
+    'callback' => function () { return [ 'ok' => true, 'ts' => time() ]; },
+    'permission_callback' => '__return_true',
+  ]);
 
-            $token = getenv('RC_DISCOGS_TOKEN') ?: '';
-            if ($token === '') {
-                return new WP_REST_Response(['ok' => false, 'error' => 'discogs_token_not_configured'], 503);
-            }
-
-            $query = trim($artist . ' ' . $title);
-            $url = add_query_arg([
-                'q' => $query,
-                'type' => $type,
-                'per_page' => 20,
-            ], 'https://api.discogs.com/database/search');
-
-            $response = wp_remote_get($url, [
-                'timeout' => 10,
-                'headers' => [
-                    'Authorization' => 'Discogs token=' . $token,
-                    'User-Agent' => 'RadioCrash/1.0 +https://www.radiocrash.net',
-                    'Accept' => 'application/json',
-                ],
-            ]);
-
-            if (is_wp_error($response)) {
-                return new WP_REST_Response(['ok' => false, 'error' => 'discogs_unavailable'], 502);
-            }
-
-            $status = (int) wp_remote_retrieve_response_code($response);
-            $body = json_decode(wp_remote_retrieve_body($response), true);
-
-            if ($status < 200 || $status >= 300 || !is_array($body)) {
-                return new WP_REST_Response(['ok' => false, 'error' => 'discogs_error'], 502);
-            }
-
-            return new WP_REST_Response([
-                'ok' => true,
-                'raw' => $body,
-            ], 200);
-        },
-    ]);
+  // Discogs proxy ruta
+  register_rest_route('rc/v1', '/discogs', [
+    'methods'  => 'GET',
+    'callback' => 'rc_discogs_proxy',
+    'permission_callback' => '__return_true',
+  ]);
 });
+
+function rc_discogs_proxy(\WP_REST_Request $req) {
+  $artist = sanitize_text_field($req->get_param('artist'));
+  $title  = sanitize_text_field($req->get_param('title'));
+  $type   = sanitize_text_field($req->get_param('type'));
+
+  if (!$artist || !$title) {
+    return new \WP_REST_Response([ 'ok' => false, 'error' => 'missing_params' ], 400);
+  }
+
+  // ✅ OVDJE STAVI TOKEN
+  $token = getenv('RC_DISCOGS_TOKEN') ?: '';
+
+  $type = ($type === 'master') ? 'master' : 'release';
+
+  // Cache 30 min (da Discogs ne vidi spam)
+  $cache_key = 'rc_discogs_' . md5(mb_strtolower($artist . '|' . $title . '|' . $type, 'UTF-8'));
+  $cached = get_transient($cache_key);
+  if ($cached !== false) {
+    return new \WP_REST_Response($cached, 200);
+  }
+
+  $params = [
+    'per_page' => 20,
+    'artist'   => $artist,
+    'track'    => $title,
+    'type'     => $type,
+  ];
+
+  $url = 'https://api.discogs.com/database/search?' . http_build_query($params);
+
+  $resp = wp_remote_get($url, [
+    'timeout' => 6,
+    'headers' => [
+      'Authorization' => 'Discogs token=' . $token,
+      'User-Agent'    => 'RadioCrashNowPlaying/1.0 (+https://www.radiocrash.net; contact: admin@radiocrash.net)',
+      'Accept'        => 'application/json',
+    ],
+  ]);
+
+  if (is_wp_error($resp)) {
+    $out = [ 'ok' => false, 'error' => $resp->get_error_message() ];
+    set_transient($cache_key, $out, 60);
+    return new \WP_REST_Response($out, 502);
+  }
+
+  $code = wp_remote_retrieve_response_code($resp);
+  $body = wp_remote_retrieve_body($resp);
+  $json = json_decode($body, true);
+
+  $out = [
+    'ok'   => ($code >= 200 && $code < 300 && is_array($json)),
+    'code' => $code,
+    'raw'  => $json,
+  ];
+
+  set_transient($cache_key, $out, $out['ok'] ? 30 * MINUTE_IN_SECONDS : 120);
+
+  return new \WP_REST_Response($out, 200);
+}
