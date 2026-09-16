@@ -42,11 +42,11 @@ Update the corresponding existing records. The PHP file is a Code Snippets body,
 
 ### Relationship to Radio Crash Reactions
 
-The supplied plugin screenshot shows **Radio Crash Reactions 0.4.5**. The [Reactions repository](https://github.com/bandarko/RadioCrash-Reactions-WordPress) already contains **0.4.7**, which implements the same `/wp-json/rc/v1/discogs` route. This frontend calls that route too; it is not exclusive to the mobile apps.
+The production setup confirmed by the owner and the supplied screenshot uses **Radio Crash Reactions 0.4.5** together with the active **`Discogs`** and **`Android RC app last 10 songs`** PHP snippets. These snippets remain separate from the production Reactions plugin.
 
-Treat these as alternative providers of the Discogs route. For the older snippet setup, this repository reads the `RC_DISCOGS_TOKEN` environment variable. For Reactions 0.4.7, configure the `RADIO_CRASH_DISCOGS_TOKEN` constant in `wp-config.php`. After deploying and configuring 0.4.7, disable the old `Discogs` snippet and verify artwork/metadata in both the web player and mobile apps. Avoid leaving both route registrations active. The frontend CSS/JS records are still needed.
+The [Reactions repository](https://github.com/bandarko/RadioCrash-Reactions-WordPress) contains later changes labelled 0.4.7 that add `/discogs` and `/history` to the plugin. Those changes are not the production reference or an approved upgrade. Do not deploy that version or disable the active production snippets based on the GitHub version number. This repository's frontend still calls `/wp-json/rc/v1/discogs`, provided by the production `Discogs` snippet.
 
-The screenshot also shows the active PHP snippet **`Android RC app last 10 songs`**. It is a separate history component, not `discogs-proxy.php`; Reactions 0.4.7 provides its replacement `/wp-json/rc/v1/history` route. The original history snippet is not included in this repository.
+The history snippet is a separate component and is not included in this repository. Its full source cannot be established from the snippet-list screenshot.
 
 ## Production source policy
 
