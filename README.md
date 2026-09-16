@@ -22,6 +22,8 @@ The JavaScript and CSS were recovered from the production WordPress Custom CSS/J
 
 The browser talks to the Radio Crash WordPress REST endpoint rather than directly exposing the Discogs credential. The repository version expects the Discogs token through the `RC_DISCOGS_TOKEN` environment variable.
 
+The repository PHP is deliberately not byte-for-byte identical to the production snippet: production currently keeps the credential inline, while this repository removes that secret from source and reads it from the environment. The route and response behavior are otherwise the same. The production credential was inspected only to confirm configuration and was not copied.
+
 No API token belongs in Git history.
 
 ## VU meter
@@ -30,21 +32,21 @@ The VU meter in this repository is the production VU implementation that belongs
 
 ## WordPress deployment map
 
-The WordPress screenshots supplied on 2026-09-16 identify two frontend records and one server-side snippet:
+Read-only inspection of WordPress on 2026-09-16 confirmed two frontend records and one server-side snippet:
 
 | Repository file | WordPress admin location | Exact record title | Type / shown state |
 | --- | --- | --- | --- |
-| `now-playing-discogs-vu.js` | Custom CSS & JS → All Custom Code | `JS 1 za Svira sada + Discogs + VU` | JavaScript / published |
-| `now-playing-discogs-vu.css` | Custom CSS & JS → All Custom Code | `CSS 1 za Svira sada + Discogs + logo lijevo + VU` | CSS / published |
-| `discogs-proxy.php` | Snippets → All Snippets (Code Snippets) | `Discogs` | PHP / active, priority 10 |
+| `now-playing-discogs-vu.js` | Custom CSS & JS → All Custom Code | `JS 1 za Svira sada + Discogs + VU` | JavaScript / active; exact production content |
+| `now-playing-discogs-vu.css` | Custom CSS & JS → All Custom Code | `CSS 1 za Svira sada + Discogs + logo lijevo + VU` | CSS / active; exact production content |
+| `discogs-proxy.php` | Snippets → All Snippets (Code Snippets) | `Discogs` | PHP / active; sanitized repository copy |
 
-Update the corresponding existing records. The PHP file is a Code Snippets body, not a standalone installable plugin. Frontend placement/loading settings and PHP execution scope are not visible in the list screenshots and must be checked in the existing editors.
+Both frontend records load internally in the page `<head>`, on the entire public frontend, for all website URLs, at priority 5. The PHP snippet runs everywhere at priority 10. Update the corresponding existing records; the PHP file is a Code Snippets body, not a standalone installable plugin.
 
 ### Relationship to Radio Crash Reactions
 
 The production setup confirmed by the owner and the supplied screenshot uses **Radio Crash Reactions 0.4.5** together with the active **`Discogs`** and **`Android RC app last 10 songs`** PHP snippets.
 
-The production `Discogs` snippet serves all three clients: Android, iOS, and this web frontend. On the website it supplies cover artwork and release information for the Now Playing display. The production `Android RC app last 10 songs` snippet supplies song history to both mobile apps.
+The production `Discogs` snippet serves all three clients: Android, iOS, and this web frontend. On the website it supplies cover artwork and release information for the Now Playing display. The production `Android RC app last 10 songs` snippet supplies song history to both mobile apps. These consumers were verified directly in the Android, iOS, and web source.
 
 The [Reactions repository](https://github.com/bandarko/RadioCrash-Reactions-WordPress) also contains later additions labelled 0.4.7 that place `/discogs` and `/history` inside the plugin source. Those additions preserve the existing reactions implementation. The installed production layout remains version 0.4.5 with the two separate active snippets shown above.
 
