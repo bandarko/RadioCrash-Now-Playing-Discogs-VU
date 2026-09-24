@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="hr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Radio Crash hybrid VU test</title>
+  <link rel="stylesheet" href="/candidate.css">
+  <style>
+    body { margin: 32px; background: #141414; color: #eee; font: 16px/1.5 system-ui, sans-serif; }
+    button { margin-right: 10px; padding: 10px 18px; font-weight: 700; }
+    pre { max-width: 760px; padding: 16px; background: #222; white-space: pre-wrap; }
+    #rc-vu-mini { position: static !important; margin-top: 24px; }
+    #rcnp-top-badge, #qwPlayerAuthor { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>Radio Crash — hybrid Safari VU test</h1>
+  <p>Mock postojećeg SoundManager playera + stvarni server-side L/R feed.</p>
+  <div id="QWplayerbar">
+    <button id="qwPlayerPlay" data-state="stop" type="button">PLAY / STOP</button>
+  </div>
+  <p id="verdict">Automatski test nije pokrenut.</p>
+  <pre id="status">učitavanje…</pre>
+
+  <script>
+    (function () {
+      const NativeEventSource = window.EventSource;
+      window.__rcHarnessEvents = { open: 0, level: 0, error: 0, last: "" };
+      window.EventSource = function (url, options) {
+        const source = new NativeEventSource(url, options);
+        source.addEventListener("open", function () { window.__rcHarnessEvents.open += 1; });
+        source.addEventListener("level", function (event) {
+          window.__rcHarnessEvents.level += 1;
+          window.__rcHarnessEvents.last = event.data.slice(0, 120);
+          if (typeof window.__rcHarnessOnLevel === "function") {
+            window.__rcHarnessOnLevel();
+          }
+        });
+        source.addEventListener("error", function () { window.__rcHarnessEvents.error += 1; });
+        return source;
+      };
+      window.EventSource.prototype = NativeEventSource.prototype;
+
+      function MockAnalyser() {
+        this.fftSize = 256;
+        this.smoothingTimeConstant = 0;
+      }
+      MockAnalyser.prototype.getByteTimeDomainData = function (array) {
+        for (let i = 0; i < array.length; i++) {
+          array[i] = 128 + Math.round(Math.sin(i / 4) * 38);
+        }
+      };
+
+      function MockAudioContext() {
+        this.state = "running";
+        this.destination = {};
+      }
+      MockAudioContext.prototype.resume = function () { return Promise.resolve(); };
+      MockAudioContext.prototype.createMediaElementSource = function () {
+        return { connect: function () {} };
+      };
+      MockAudioContext.prototype.createChannelSplitter = function () {
+        return { connect: function () {} };
+      };
+      MockAudioContext.prototype.createAnalyser = function () { return new MockAnalyser(); };
+      window.AudioContext = MockAudioContext;
+
+      const audio = new EventTarget();
+      audio.paused = true;
+      audio.ended = false;
+      audio.currentSrc = "";
+      audio.readyState = 0;
+      audio.currentTime = 0;
+      audio.getAttribute = function () { return ""; };
+      audio.setAttribute = function () {};
+      let playToken = 0;
+
+      window.__rcHarnessUnloads = 0;
+      window.__rcHarnessAuto = { cycle: 0, done: false, failures: [], samples: [] };
+
+      const sound = {
+        id: "currentSound",
+        _a: audio,
+        playState: 0,
+        paused: false,
+        unload: function () {
+          window.__rcHarnessUnloads += 1;
+          audio.paused = true;
+          audio.readyState = 0;
+          audio.currentTime = 0;
+          this.playState = 0;
+          this.paused = false;
+        }
+      };
+
+      window.soundManager = {
+        sounds: { currentSound: sound },
+        createSound: function () { return sound; }
+      };
+
+      document.getElementById("qwPlayerPlay").addEventListener("click", function () {
+        const button = this;
+        if (button.dataset.state === "play") {
+          playToken += 1;
+          button.dataset.state = "stop";
+          audio.paused = true;
+          sound.paused = true;
+          audio.dispatchEvent(new Event("pause"));
+          return;
+        }
+
+        const token = ++playToken;
+        button.dataset.state = "play";
+        audio.paused = false;
+        sound.playState = 1;
+        sound.paused = false;
+        audio.dispatchEvent(new Event("play"));
+        const announcePlaying = function () {
+          if (token !== playToken || audio.paused) return;
+          audio.readyState = 4;
+          audio.currentTime = 1;
+          audio.dispatchEvent(new Event("playing"));
+        };
+
+        if (new URLSearchParams(location.search).has("autorun")) {
+          queueMicrotask(announcePlaying);
+        } else {
+          setTimeout(announcePlaying, 2500);
+        }
+      });
+
+      window.__rcHarnessSound = sound;
+    })();
+  </script>
+  <script src="/candidate.js"></script>
+  <script>
+    (function runAutomaticSafariCycles() {
+      if (!new URLSearchParams(location.search).has("autorun")) return;
+
+      const result = window.__rcHarnessAuto;
+      const button = document.getElementById("qwPlayerPlay");
+      const totalCycles = 5;
+
+      function fail(message) {
+        result.failures.push("ciklus " + result.cycle + ": " + message);
+      }
+
+      function startCycle() {
+        result.cycle += 1;
+        const levelsBefore = window.__rcHarnessEvents.level;
+        const runtime = window.RC_VU_HYBRID_RUNTIME;
+        const debugBefore = runtime && runtime.debugState ? runtime.debugState() : {};
+        const processedBefore = debugBefore.serverLevelEvents || 0;
+        let finishing = false;
+
+        function finishPlayPhase() {
+          if (finishing) return;
+          finishing = true;
+          window.__rcHarnessOnLevel = null;
+          const beforeStop = runtime && runtime.debugState ? runtime.debugState() : {};
+          const lit = document.querySelectorAll("#rc-vu-mini .rc-vu-led.on").length;
+
+          if (!beforeStop.active || !beforeStop.safariPlaybackReady) fail("VU nije aktivan nakon playing");
+          if (window.__rcHarnessEvents.level <= levelsBefore) fail("nema novih SSE level paketa");
+          if ((beforeStop.serverLevelEvents || 0) <= processedBefore) fail("SSE razine nisu obrađene");
+          if (!lit) fail("LED-ice se nisu upalile");
+
+          button.click();
+
+          queueMicrotask(function () {
+            const afterStop = runtime && runtime.debugState ? runtime.debugState() : {};
+            const litAfterStop = document.querySelectorAll("#rc-vu-mini .rc-vu-led.on").length;
+            if (window.__rcHarnessUnloads !== result.cycle) fail("stari stream nije otpušten točno jednom");
+            if (afterStop.active || afterStop.safariPlaybackReady) fail("VU je ostao aktivan nakon Stop");
+            if (litAfterStop) fail("LED-ice nisu ugašene nakon Stop");
+
+            result.samples.push({
+              cycle: result.cycle,
+              unloads: window.__rcHarnessUnloads,
+              sseOpens: window.__rcHarnessEvents.open,
+              sseLevels: window.__rcHarnessEvents.level,
+              renderedL: beforeStop.renderedL,
+              renderedR: beforeStop.renderedR
+            });
+
+            if (result.cycle < totalCycles) {
+              queueMicrotask(startCycle);
+            } else {
+              result.done = true;
+            }
+          });
+        }
+
+        window.__rcHarnessOnLevel = function () {
+          if (window.__rcHarnessEvents.level - levelsBefore >= 10) {
+            queueMicrotask(finishPlayPhase);
+          }
+        };
+        button.click();
+      }
+
+      queueMicrotask(startCycle);
+    })();
+
+    setInterval(function () {
+      const vu = document.getElementById("rc-vu-mini");
+      const left = document.querySelectorAll('.rc-vu-leds[data-ch="l"] .on').length;
+      const right = document.querySelectorAll('.rc-vu-leds[data-ch="r"] .on').length;
+      const runtime = window.RC_VU_HYBRID_RUNTIME;
+      const events = window.__rcHarnessEvents;
+      const auto = window.__rcHarnessAuto;
+      const debug = runtime && runtime.debugState ? runtime.debugState() : {};
+      const verdict = document.getElementById("verdict");
+      if (auto.done) {
+        verdict.textContent = auto.failures.length
+          ? "AUTO FAIL — " + auto.failures.length + " grešaka"
+          : "AUTO PASS — 5/5 Safari STOP/START ciklusa";
+      } else if (auto.cycle) {
+        verdict.textContent = "Automatski Safari test: ciklus " + auto.cycle + "/5";
+      }
+      document.getElementById("status").textContent = [
+        "mode=" + (vu ? vu.dataset.mode : "missing"),
+        "runtime=" + (runtime ? runtime.mode : "missing"),
+        "playing=" + (!window.__rcHarnessSound._a.paused),
+        "LED L/R=" + left + "/" + right,
+        "SSE open/level/error=" + events.open + "/" + events.level + "/" + events.error,
+        "SSE last=" + events.last,
+        "stream unloads=" + window.__rcHarnessUnloads,
+        "auto=" + JSON.stringify(auto),
+        "debug=" + JSON.stringify(debug),
+        "userAgent=" + navigator.userAgent
+      ].join("\n");
+    }, 200);
+  </script>
+</body>
+</html>

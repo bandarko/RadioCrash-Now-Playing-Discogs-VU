@@ -1,0 +1,37 @@
+[Unit]
+Description=Radio Crash server-side stereo VU level feed
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=banadmin
+Group=banadmin
+WorkingDirectory=/opt/radiocrash-vu
+Environment=PYTHONUNBUFFERED=1
+Environment=RC_VU_STREAM_URL=http://127.0.0.1:8000/live.mp3
+Environment=RC_VU_LISTEN_HOST=127.0.0.1
+Environment=RC_VU_LISTEN_PORT=8767
+Environment=RC_VU_UPDATES_PER_SECOND=60
+Environment=RC_VU_BUFFER_SECONDS=1.5
+Environment=RC_VU_ANALYSIS_FRAMES=256
+ExecStart=/usr/bin/python3 /opt/radiocrash-vu/rc_vu_server.py
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=256M
+CPUQuota=30%
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

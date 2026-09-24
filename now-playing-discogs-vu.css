@@ -1,3 +1,12 @@
+/**
+ * RADIO CRASH — NOW PLAYING + DISCOGS + LOGO + VU
+ * WordPress: Custom CSS & JS → "CSS 1 za Svira sada + Discogs + logo lijevo + VU"
+ * Copy/paste cijele datoteke u postojeći CSS zapis.
+ *
+ * Verzija dokumentacije: 2026-09-24 — hybrid real VU v3
+ * VU izgled ostaje isti: 18 LED segmenata, desktop prikaz i mobile hide do 900 px.
+ */
+
 /* === RC • Top-right "Sada svira" badge + cover === */
 #rcnp-top-badge {
   position: fixed;

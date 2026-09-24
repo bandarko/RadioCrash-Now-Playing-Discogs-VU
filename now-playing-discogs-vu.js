@@ -1,3 +1,18 @@
+/**
+ * RADIO CRASH — NOW PLAYING + DISCOGS + VU
+ * WordPress: Custom CSS & JS → "JS 1 za Svira sada + Discogs + VU"
+ * Copy/paste cijele datoteke u postojeći JavaScript zapis.
+ *
+ * Verzija: 2026-09-24 — hybrid real VU v3.3 Safari live-match
+ * - Now Playing i Discogs koriste postojeći WP proxy.
+ * - VU ima 18 LED segmenata po kanalu.
+ * - Chrome/Firefox/Brave analiziraju samo postojeći SoundManager2 player.
+ * - Safari prima samo brojčane L/R razine sa servera preko SSE-a.
+ * - Ne stvara drugi Audio(), ne postavlja drugi stream URL i ne poziva play()/pause().
+ * - Na ekranima do 900 px VU se uopće ne inicijalizira.
+ * - Nema fake/random fallbacka: bez stvarnog signala LED-ice ostaju na nuli.
+ */
+
 (function () {
   // ===== RC Now Playing (proxy-only) =====
   // Verzija: 2026-02-15 rc-np-proxy-v1
@@ -400,40 +415,86 @@
 })();
 
 
-
-/* === RC VU METER STEREO - REAL STREAM TEST + FALLBACK - 28.4.2026. === */
+/* === RC VU METER STEREO - HYBRID REAL VU v3.3 SAFARI LIVE-MATCH - 24.9.2026. ===
+ * Chrome/Firefox/Brave: Web Audio analizira postojeći player.
+ * Safari: server šalje samo stvarne brojčane L/R razine preko SSE-a.
+ * Ni jedna grana ne stvara dodatni Audio niti pokreće drugi audio stream.
+ */
 (function () {
-  const STREAM_URL = "https://live.radiocrash.net/live.mp3";
-	
-const IS_MOBILE = window.matchMedia("(max-width: 900px)").matches;
-if (IS_MOBILE) return;
-	
-	const IS_SAFARI = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-	
+  const RUNTIME_KEY = "RC_VU_HYBRID_RUNTIME";
+  const LEGACY_RUNTIME_KEY = "RC_VU_EXISTING_PLAYER_RUNTIME";
+  const GRAPH_KEY = "__rcVuExistingPlayerGraph";
+  const SERVER_EVENTS_URL = "https://live.radiocrash.net/vu/events";
+  const DEBUG = false;
+
+  const userAgent = navigator.userAgent || "";
+  const vendor = navigator.vendor || "";
+  const IS_SAFARI =
+    /Safari/i.test(userAgent) &&
+    /Apple Computer/i.test(vendor) &&
+    !/(Chrome|Chromium|CriOS|Edg|OPR|Firefox|FxiOS)/i.test(userAgent);
+
+  // Ukloni staru instancu ako se Custom JS ponovno izvrši.
+  [RUNTIME_KEY, LEGACY_RUNTIME_KEY].forEach(function (key) {
+    if (window[key] && typeof window[key].destroy === "function") {
+      try { window[key].destroy(); } catch (_) {}
+    }
+  });
+
+  // Na mobitelima se VU logika i server veza uopće ne pokreću.
+  if (window.matchMedia("(max-width: 900px)").matches) {
+    const oldVu = document.getElementById("rc-vu-mini");
+    if (oldVu) oldVu.remove();
+    return;
+  }
+
   let active = false;
   let raf = null;
   let syncTimer = null;
+  let hookTimer = null;
+  let safariReleaseToken = 0;
+  let safariStreamReleases = 0;
 
-  let realReady = false;
-  let realFailed = false;
-  let audio = null;
+  let mainAudio = null;
+  let observedAudio = null;
   let audioCtx = null;
-
   let analyserL = null;
   let analyserR = null;
   let dataArrayL = null;
   let dataArrayR = null;
+  let graphFailedFor = null;
 
+  let eventSource = null;
+  let safariPlaybackReady = false;
+  let lastServerEventAt = 0;
+  let targetL = 0;
+  let targetR = 0;
   let lastL = 0;
   let lastR = 0;
+  let serverLevelEvents = 0;
+  const ledCache = { l: null, r: null };
+  const renderedCount = { l: -1, r: -1 };
 
-  const DECAY = 0.3; // brzina padanja VU-a: 0.3 = sporije, 1.0 = brže
+  const DECAY = 0.3;
+  const LOCAL_GAIN = 24;
+
+  function log(...args) {
+    if (DEBUG) console.log("[RC VU]", ...args);
+  }
+
+  function warn(...args) {
+    console.warn("[RC VU]", ...args);
+  }
 
   function createVu() {
-    if (document.getElementById("rc-vu-mini")) return;
+    if (document.getElementById("rc-vu-mini")) {
+      cacheVuLeds();
+      return;
+    }
 
     const vu = document.createElement("div");
     vu.id = "rc-vu-mini";
+    vu.dataset.mode = IS_SAFARI ? "server-waiting" : "local-waiting";
     vu.innerHTML = `
       <div class="rc-vu-line">
         <span class="rc-vu-lbl">L</span>
@@ -448,7 +509,7 @@ if (IS_MOBILE) return;
     document.body.appendChild(vu);
 
     vu.querySelectorAll(".rc-vu-leds").forEach(function (bar) {
-      for (let i = 0; i < 18; i++) {	
+      for (let i = 0; i < 18; i++) {
         const led = document.createElement("span");
         led.className = "rc-vu-led";
         if (i >= 11 && i < 14) led.classList.add("yellow");
@@ -456,216 +517,596 @@ if (IS_MOBILE) return;
         bar.appendChild(led);
       }
     });
+
+    cacheVuLeds();
   }
 
-  function setLevel(ch, level) {
-    const bar = document.querySelector('.rc-vu-leds[data-ch="' + ch + '"]');
-    if (!bar) return;
-
-    const leds = bar.querySelectorAll(".rc-vu-led");
-    const count = Math.max(0, Math.min(leds.length, Math.round(level)));
-
-    leds.forEach(function (led, i) {
-      led.classList.toggle("on", i < count);
+  function cacheVuLeds() {
+    ["l", "r"].forEach(function (channel) {
+      const bar = document.querySelector('.rc-vu-leds[data-ch="' + channel + '"]');
+      ledCache[channel] = bar ? Array.from(bar.querySelectorAll(".rc-vu-led")) : [];
+      renderedCount[channel] = -1;
     });
   }
 
-  function getRMS(dataArray) {
+  function setMode(mode) {
+    const vu = document.getElementById("rc-vu-mini");
+    if (vu) vu.dataset.mode = mode;
+  }
+
+  function setLevel(channel, level) {
+    const leds = ledCache[channel] || [];
+    if (!leds.length) return;
+    const count = Math.max(0, Math.min(leds.length, Math.round(level)));
+    const previous = renderedCount[channel];
+
+    if (count === previous) return;
+
+    if (previous < 0) {
+      leds.forEach(function (led, index) {
+        led.classList.toggle("on", index < count);
+      });
+    } else if (count > previous) {
+      for (let index = previous; index < count; index++) leds[index].classList.add("on");
+    } else {
+      for (let index = count; index < previous; index++) leds[index].classList.remove("on");
+    }
+
+    renderedCount[channel] = count;
+  }
+
+  function zeroLevels() {
+    targetL = 0;
+    targetR = 0;
+    lastL = 0;
+    lastR = 0;
+    setLevel("l", 0);
+    setLevel("r", 0);
+  }
+
+  function getMainSound() {
+    try {
+      if (
+        window.soundManager &&
+        window.soundManager.sounds &&
+        window.soundManager.sounds.currentSound
+      ) {
+        return window.soundManager.sounds.currentSound;
+      }
+
+      const jq = window.jQuery || window.$;
+      if (jq && jq.mySound) return jq.mySound;
+    } catch (_) {}
+
+    return null;
+  }
+
+  function getMainAudio() {
+    const sound = getMainSound();
+    return sound && sound._a ? sound._a : null;
+  }
+
+  function isMainPlayerPlaying() {
+    const sound = getMainSound();
+    const audio = sound && sound._a;
+
+    // Safari server feed smije krenuti tek na stvarnom HTMLMediaElement
+    // "playing" događaju, ne već kada SoundManager primi naredbu Play.
+    if (IS_SAFARI) {
+      return !!audio && safariPlaybackReady && !audio.paused && !audio.ended;
+    }
+
+    if (audio && !audio.paused && !audio.ended) return true;
+    return !!sound && sound.playState === 1 && sound.paused !== true;
+  }
+
+  function prepareMainAudioForCors(sound) {
+    try {
+      const audio = sound && sound._a;
+      if (!audio) return;
+
+      // Potrebno je samo za lokalni Web Audio analyser, prije dodjele stream URL-a.
+      if (!audio.currentSrc && !audio.getAttribute("src")) {
+        audio.crossOrigin = "anonymous";
+        if (typeof audio.setAttribute === "function") {
+          audio.setAttribute("crossorigin", "anonymous");
+        }
+      }
+    } catch (_) {}
+  }
+
+  function installSoundManagerCorsHook() {
+    if (IS_SAFARI) return true;
+
+    const sm = window.soundManager;
+    if (!sm || typeof sm.createSound !== "function") return false;
+
+    if (!sm.__rcVuHybridCorsHook) {
+      const originalCreateSound = sm.createSound;
+
+      sm.createSound = function () {
+        const sound = originalCreateSound.apply(this, arguments);
+
+        try {
+          const options = arguments[0];
+          const requestedId =
+            typeof options === "string" ? options : options && options.id;
+
+          if (requestedId === "currentSound" || (sound && sound.id === "currentSound")) {
+            prepareMainAudioForCors(sound);
+            const audio = sound && sound._a;
+            observeMainAudio(audio);
+            if (audioCtx) attachLocalAudio(audio);
+          }
+        } catch (_) {}
+
+        return sound;
+      };
+
+      sm.__rcVuHybridCorsHook = true;
+      log("SoundManager CORS hook installed");
+    }
+
+    prepareMainAudioForCors(getMainSound());
+    return true;
+  }
+
+  function ensureAudioContext() {
+    if (audioCtx) return audioCtx;
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return null;
+
+    try {
+      audioCtx = new AudioContextClass();
+      return audioCtx;
+    } catch (error) {
+      warn("AudioContext nije dostupan.", error);
+      return null;
+    }
+  }
+
+  function resumeAudioContext() {
+    if (IS_SAFARI) return;
+
+    const ctx = ensureAudioContext();
+    if (!ctx || ctx.state === "running") return;
+
+    try {
+      const result = ctx.resume();
+      if (result && typeof result.catch === "function") result.catch(function () {});
+    } catch (_) {}
+  }
+
+  function useGraph(graph, audio) {
+    mainAudio = audio;
+    audioCtx = graph.audioCtx;
+    analyserL = graph.analyserL;
+    analyserR = graph.analyserR;
+    dataArrayL = graph.dataArrayL;
+    dataArrayR = graph.dataArrayR;
+    graphFailedFor = null;
+    setMode("local-real");
+  }
+
+  function attachLocalAudio(audio) {
+    if (IS_SAFARI || !audio || graphFailedFor === audio) return false;
+
+    observeMainAudio(audio);
+
+    if (audio[GRAPH_KEY]) {
+      useGraph(audio[GRAPH_KEY], audio);
+      return true;
+    }
+
+    const ctx = ensureAudioContext();
+    if (!ctx) return false;
+
+    try {
+      // Isključivo audio element postojećeg playera; nema new Audio/src/play.
+      const source = ctx.createMediaElementSource(audio);
+      source.connect(ctx.destination);
+
+      const splitter = ctx.createChannelSplitter(2);
+      const left = ctx.createAnalyser();
+      const right = ctx.createAnalyser();
+
+      left.fftSize = 256;
+      right.fftSize = 256;
+      left.smoothingTimeConstant = 0.18;
+      right.smoothingTimeConstant = 0.18;
+
+      source.connect(splitter);
+      splitter.connect(left, 0);
+      splitter.connect(right, 1);
+
+      const graph = {
+        audioCtx: ctx,
+        source,
+        splitter,
+        analyserL: left,
+        analyserR: right,
+        dataArrayL: new Uint8Array(left.fftSize),
+        dataArrayR: new Uint8Array(right.fftSize)
+      };
+
+      Object.defineProperty(audio, GRAPH_KEY, {
+        configurable: false,
+        enumerable: false,
+        writable: false,
+        value: graph
+      });
+
+      useGraph(graph, audio);
+      return true;
+    } catch (error) {
+      graphFailedFor = audio;
+      setMode("local-error");
+      warn("Lokalni analyser se nije mogao spojiti; drugi stream nije pokrenut.", error);
+      return false;
+    }
+  }
+
+  function attachToExistingPlayer() {
+    return attachLocalAudio(getMainAudio());
+  }
+
+  function dbToLedLevel(value) {
+    const db = Number(value);
+    if (!Number.isFinite(db) || db <= -96) return 0;
+
+    // Ista matematika kao u Chrome/Firefox/Brave grani:
+    // dBFS -> linearni RMS -> postojeći gain od 24.
+    const linearRms = Math.pow(10, db / 20);
+    return Math.max(0, Math.min(18, linearRms * LOCAL_GAIN));
+  }
+
+  function renderSafariServerLevel() {
+    // Safari zna usporiti ili potpuno pauzirati requestAnimationFrame čak i dok
+    // EventSource uredno prima podatke. Crtanje na samom SSE događaju daje isti
+    // ritam kao Chrome analyser: jedan novi stereo uzorak otprilike svakih 16 ms.
+    lastL = approachLevel(lastL, targetL);
+    lastR = approachLevel(lastR, targetR);
+    setLevel("l", lastL);
+    setLevel("r", lastR);
+  }
+
+  function closeServerFeed() {
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    lastServerEventAt = 0;
+  }
+
+  function openServerFeed() {
+    if (!IS_SAFARI || !active || eventSource) return;
+    if (!("EventSource" in window)) {
+      setMode("server-unsupported");
+      return;
+    }
+
+    setMode("server-connecting");
+    const source = new EventSource(SERVER_EVENTS_URL);
+    eventSource = source;
+
+    source.addEventListener("open", function () {
+      if (eventSource !== source) return;
+      setMode("server-real");
+    });
+
+    source.addEventListener("level", function (event) {
+      if (eventSource !== source || !active) return;
+
+      try {
+        const data = JSON.parse(event.data);
+        if (!data || data.online !== true) {
+          targetL = 0;
+          targetR = 0;
+          renderSafariServerLevel();
+          setMode("server-offline");
+          return;
+        }
+
+        targetL = dbToLedLevel(data.rmsDbL);
+        targetR = dbToLedLevel(data.rmsDbR);
+        serverLevelEvents += 1;
+        lastServerEventAt = Date.now();
+        renderSafariServerLevel();
+        setMode("server-real");
+      } catch (error) {
+        log("Neispravan VU SSE paket", error);
+      }
+    });
+
+    source.addEventListener("error", function () {
+      if (eventSource !== source) return;
+      targetL = 0;
+      targetR = 0;
+      renderSafariServerLevel();
+      setMode("server-reconnecting");
+      // EventSource se sam ponovno spaja; namjerno ga ne zamjenjujemo.
+    });
+  }
+
+  function observeMainAudio(audio) {
+    if (!audio || observedAudio === audio) return;
+
+    if (observedAudio && typeof observedAudio.removeEventListener === "function") {
+      observedAudio.removeEventListener("play", onMainAudioPlay);
+      observedAudio.removeEventListener("playing", onMainAudioPlaying);
+      observedAudio.removeEventListener("pause", onMainAudioPause);
+      observedAudio.removeEventListener("ended", onMainAudioPause);
+      observedAudio.removeEventListener("waiting", onMainAudioWaiting);
+      observedAudio.removeEventListener("stalled", onMainAudioWaiting);
+    }
+
+    observedAudio = audio;
+    if (IS_SAFARI) {
+      safariPlaybackReady = !!(
+        !audio.paused &&
+        !audio.ended &&
+        Number(audio.readyState || 0) >= 3 &&
+        Number(audio.currentTime || 0) > 0
+      );
+    }
+
+    if (typeof audio.addEventListener === "function") {
+      audio.addEventListener("play", onMainAudioPlay);
+      audio.addEventListener("playing", onMainAudioPlaying);
+      audio.addEventListener("pause", onMainAudioPause);
+      audio.addEventListener("ended", onMainAudioPause);
+      audio.addEventListener("waiting", onMainAudioWaiting);
+      audio.addEventListener("stalled", onMainAudioWaiting);
+    }
+  }
+
+  function onMainAudioPlay() {
+    if (IS_SAFARI) safariPlaybackReady = false;
+    syncVuWithMainPlayer();
+  }
+
+  function onMainAudioPlaying() {
+    if (IS_SAFARI) safariPlaybackReady = true;
+    syncVuWithMainPlayer();
+  }
+
+  function onMainAudioPause() {
+    if (IS_SAFARI) safariPlaybackReady = false;
+    syncVuWithMainPlayer();
+  }
+
+  function onMainAudioWaiting() {
+    if (IS_SAFARI) safariPlaybackReady = false;
+    syncVuWithMainPlayer();
+  }
+
+  function getRms(dataArray) {
     let sum = 0;
 
     for (let i = 0; i < dataArray.length; i++) {
-      const v = (dataArray[i] - 128) / 128;
-      sum += v * v;
+      const value = (dataArray[i] - 128) / 128;
+      sum += value * value;
     }
 
     return Math.sqrt(sum / dataArray.length);
   }
 
-  function isMainPlayerPlaying() {
-    try {
-      if (window.$ && $.mySound && $.mySound._a) {
-        const mainAudio = $.mySound._a;
-        return !mainAudio.paused && !mainAudio.ended;
-      }
-    } catch (_) {}
-    return false;
-  }
-
-  async function initRealStream() {
-    if (IS_SAFARI) {
-      realReady = false;
-      realFailed = true;
-      return false;
-    }
-
-    if (realReady && audio) {
-      try { await audio.play(); } catch (_) {}
-      return true;
-    }
-
-    if (realFailed) return false;
-	  
-    try {
-      audio = new Audio();
-      audio.crossOrigin = "anonymous";
-      audio.src = STREAM_URL;
-      audio.preload = "auto";
-      audio.volume = 1;
-
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      await audioCtx.resume();
-
-      const source = audioCtx.createMediaElementSource(audio);
-      const splitter = audioCtx.createChannelSplitter(2);
-
-      analyserL = audioCtx.createAnalyser();
-      analyserR = audioCtx.createAnalyser();
-
-      analyserL.fftSize = 256;
-      analyserR.fftSize = 256;
-
-      analyserL.smoothingTimeConstant = 0.18; // bio je 25
-      analyserR.smoothingTimeConstant = 0.18; // bio je 25
-
-      source.connect(splitter);
-      splitter.connect(analyserL, 0);
-      splitter.connect(analyserR, 1);
-
-      const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0;
-      source.connect(silentGain);
-      silentGain.connect(audioCtx.destination);
-
-      dataArrayL = new Uint8Array(analyserL.fftSize);
-      dataArrayR = new Uint8Array(analyserR.fftSize);
-
-      await audio.play();
-
-      realReady = true;
-      console.log("RC VU: REAL STEREO STREAM MODE");
-      return true;
-    } catch (e) {
-      realFailed = true;
-      realReady = false;
-      console.warn("RC VU: REAL STREAM FAILED", e);
-      return false;
-    }
+  function approachLevel(current, target) {
+    // Kao originalni Chrome VU: napad je trenutačan, samo pad ima decay.
+    if (target >= current) return target;
+    return Math.max(target, current - DECAY);
   }
 
   function frame() {
-    if (!active) {
-      setLevel("l", 0);
-      setLevel("r", 0);
-      return;
-    }
+    if (!active) return;
 
-    if (realReady && analyserL && analyserR && dataArrayL && dataArrayR) {
+    if (analyserL && analyserR && dataArrayL && dataArrayR) {
       analyserL.getByteTimeDomainData(dataArrayL);
       analyserR.getByteTimeDomainData(dataArrayR);
 
-      const rmsL = getRMS(dataArrayL);
-      const rmsR = getRMS(dataArrayR);
-
-      let levelL = Math.max(0, Math.min(18, rmsL * 24)); // koliko daleko ide VU L
-      let levelR = Math.max(0, Math.min(18, rmsR * 24)); // koliko daleko ide VU R
-
-      if (levelL < lastL) levelL = Math.max(0, lastL - DECAY);
-      if (levelR < lastR) levelR = Math.max(0, lastR - DECAY);
-
-      lastL = levelL;
-      lastR = levelR;
-
-      if (IS_SAFARI && levelL < 1.5 && levelR < 1.5) {
-        const base = 5 + Math.random() * 6;
-        setLevel("l", base + Math.random() * 2);
-        setLevel("r", base + Math.random() * 2 - 0.6);
-      } else {
-        setLevel("l", levelL);
-        setLevel("r", levelR);
-      }
+      const measuredL = Math.max(0, Math.min(18, getRms(dataArrayL) * LOCAL_GAIN));
+      const measuredR = Math.max(0, Math.min(18, getRms(dataArrayR) * LOCAL_GAIN));
+      lastL = approachLevel(lastL, measuredL);
+      lastR = approachLevel(lastR, measuredR);
     } else {
-      const base = 4 + Math.random() * 5;
-      const peak = Math.random() > 0.92 ? 2 + Math.random() * 3 : 0;
-
-      setLevel("l", base + peak + Math.random() * 1.5);
-      setLevel("r", base + peak + Math.random() * 1.5 - 0.5);
+      lastL = approachLevel(lastL, 0);
+      lastR = approachLevel(lastR, 0);
     }
 
+    setLevel("l", lastL);
+    setLevel("r", lastR);
     raf = requestAnimationFrame(frame);
   }
 
-  async function startVu() {
+  function startVu() {
     createVu();
     if (active) return;
 
     active = true;
-    cancelAnimationFrame(raf);
+    zeroLevels();
 
-    await initRealStream();
-    frame();
+    if (IS_SAFARI) {
+      openServerFeed();
+    } else {
+      resumeAudioContext();
+      attachToExistingPlayer();
+      cancelAnimationFrame(raf);
+      frame();
+    }
   }
 
   function stopVu() {
     active = false;
     cancelAnimationFrame(raf);
-
-    if (audio) {
-      try { audio.pause(); } catch (_) {}
-    }
-
-    lastL = 0;
-    lastR = 0;
-
-    setLevel("l", 0);
-    setLevel("r", 0);
+    closeServerFeed();
+    zeroLevels();
+    setMode(IS_SAFARI ? "server-waiting" : "local-waiting");
   }
 
   function syncVuWithMainPlayer() {
+    const audio = getMainAudio();
+    observeMainAudio(audio);
+
+    if (IS_SAFARI && active && lastServerEventAt && Date.now() - lastServerEventAt > 2500) {
+      targetL = 0;
+      targetR = 0;
+      zeroLevels();
+      setMode("server-stale");
+    }
+
     if (isMainPlayerPlaying()) {
-      if (!active) startVu();
-    } else {
-      if (active) stopVu();
+      if (!active) {
+        startVu();
+      } else if (IS_SAFARI) {
+        openServerFeed();
+      } else if (!analyserL || mainAudio !== audio) {
+        attachLocalAudio(audio);
+      }
+    } else if (active) {
+      stopVu();
+    }
+  }
+
+  function releasePausedSafariStream() {
+    if (!IS_SAFARI) return;
+
+    const playButton = document.getElementById("qwPlayerPlay");
+    if (!playButton || playButton.getAttribute("data-state") !== "stop") return;
+
+    const sound = getMainSound();
+    if (!sound) return;
+
+    // Vice tema na Stop radi samo pause(). Kod beskonačnog AAC streama Safari
+    // zatim nastavlja zastarjeli komprimirani buffer, što nakon više ciklusa
+    // može uzrokovati preskakanje, digitalne artefakte i nestanak zvuka.
+    // Unload zatvara isključivo vezu postojećeg playera; sljedeći Play na istom
+    // SoundManager objektu otvara svjež stream. Ne stvara se dodatni Audio().
+    try {
+      if (typeof sound.unload === "function") {
+        sound.unload();
+      } else if (sound._a) {
+        sound._a.pause();
+        sound._a.removeAttribute("src");
+        sound._a.load();
+      }
+      safariStreamReleases += 1;
+      safariPlaybackReady = false;
+      stopVu();
+      log("Safari live stream otpušten nakon Stop.");
+    } catch (error) {
+      warn("Safari live stream nije se mogao otpustiti nakon Stop.", error);
+    }
+  }
+
+  function isPlayerClick(target) {
+    if (!target || typeof target.closest !== "function") return false;
+
+    return !!(
+      target.closest("#QWplayerbar") ||
+      target.closest("#qwPlayerbar") ||
+      target.closest("#qwPlayerBar") ||
+      target.closest(".qw-footer-bar") ||
+      target.closest("#rc-vu-mini")
+    );
+  }
+
+  function onDocumentClick(event) {
+    if (!isPlayerClick(event.target)) return;
+
+    const clickedMainPlayButton = !!(
+      event.target &&
+      typeof event.target.closest === "function" &&
+      event.target.closest("#qwPlayerPlay")
+    );
+
+    if (!IS_SAFARI) {
+      installSoundManagerCorsHook();
+      resumeAudioContext();
+      attachToExistingPlayer();
+    } else if (clickedMainPlayButton) {
+      const releaseToken = ++safariReleaseToken;
+      // Capture listener se izvrši prije click handlera teme. Microtask se izvrši
+      // odmah nakon cijelog click dispatcha, kada je tema već promijenila stanje,
+      // ali ga Safari ne usporava kao setTimeout u pozadinskoj kartici.
+      const afterClick = window.queueMicrotask || function (callback) {
+        Promise.resolve().then(callback);
+      };
+      afterClick(function () {
+        if (releaseToken === safariReleaseToken) releasePausedSafariStream();
+      });
+    }
+
+    // Tema tek nakon klika stvara ili mijenja SoundManager audio element.
+    setTimeout(syncVuWithMainPlayer, 80);
+    setTimeout(syncVuWithMainPlayer, 350);
+  }
+
+  function onVisibilityChange() {
+    if (document.visibilityState !== "visible") return;
+    if (!IS_SAFARI) resumeAudioContext();
+    setTimeout(syncVuWithMainPlayer, 0);
+  }
+
+  function destroy() {
+    active = false;
+    cancelAnimationFrame(raf);
+    clearInterval(syncTimer);
+    clearInterval(hookTimer);
+    safariReleaseToken += 1;
+    closeServerFeed();
+    zeroLevels();
+
+    document.removeEventListener("click", onDocumentClick, true);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+
+    if (observedAudio && typeof observedAudio.removeEventListener === "function") {
+      observedAudio.removeEventListener("play", onMainAudioPlay);
+      observedAudio.removeEventListener("playing", onMainAudioPlaying);
+      observedAudio.removeEventListener("pause", onMainAudioPause);
+      observedAudio.removeEventListener("ended", onMainAudioPause);
+      observedAudio.removeEventListener("waiting", onMainAudioWaiting);
+      observedAudio.removeEventListener("stalled", onMainAudioWaiting);
     }
   }
 
   function init() {
     createVu();
 
-    document.addEventListener("click", function (e) {
-      const inPlayer =
-        e.target.closest("#qwPlayerbar") ||
-        e.target.closest("#qwPlayerBar") ||
-        e.target.closest(".qw-footer-bar") ||
-        e.target.closest("#rc-vu-mini");
-
-      if (!inPlayer) return;
-      setTimeout(startVu, 150);
-    }, true);
-
-    if (!syncTimer) {
-      syncTimer = setInterval(syncVuWithMainPlayer, 500);
+    if (!IS_SAFARI && !installSoundManagerCorsHook()) {
+      hookTimer = setInterval(function () {
+        if (installSoundManagerCorsHook()) {
+          clearInterval(hookTimer);
+          hookTimer = null;
+        }
+      }, 250);
     }
 
-    // 🔥 FIX: probudi VU kad se vratiš na tab
-    document.addEventListener("visibilitychange", async function () {
-      if (document.visibilityState !== "visible") return;
+    document.addEventListener("click", onDocumentClick, true);
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
-      try {
-        if (audioCtx && audioCtx.state === "suspended") {
-          await audioCtx.resume();
-        }
-
-        if (active) {
-          cancelAnimationFrame(raf);
-          frame();
-        }
-
-        if (isMainPlayerPlaying() && !active) {
-          startVu();
-        }
-      } catch (_) {}
-    });
+    syncTimer = setInterval(syncVuWithMainPlayer, 500);
+    syncVuWithMainPlayer();
   }
+
+  window[RUNTIME_KEY] = {
+    destroy,
+    mode: IS_SAFARI ? "server-safari" : "local-browser",
+    debugState: function () {
+      return {
+        active,
+        safariPlaybackReady,
+        targetL,
+        targetR,
+        lastL,
+        lastR,
+        renderedL: renderedCount.l,
+        renderedR: renderedCount.r,
+        safariStreamReleases,
+        serverLevelEvents
+      };
+    }
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init, { once: true });
