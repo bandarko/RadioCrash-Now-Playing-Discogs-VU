@@ -37,6 +37,8 @@ The VU connects `AnalyserNode` objects to the `HTMLAudioElement` already owned b
 
 Safari/WebKit reproduces the live AAC stream but returns zeroes from the browser-side `MediaElementAudioSourceNode` analyser. The server therefore runs one FFmpeg decoder against the existing local Shoutcast stream and publishes only compact L/R RMS and peak numbers.
 
+This is a WebKit live-stream limitation, not a fake-VU design choice. The tested Safari path played the stream while both byte and float analyser data remained zero; the same VU graph worked with a finite WAV file. CORS headers, a same-origin proxy and alternate MIME headers did not change the live-stream result. See [`docs/WHY-SAFARI-NEEDS-SERVER-VU.md`](docs/WHY-SAFARI-NEEDS-SERVER-VU.md) for the full explanation, evidence and trade-offs.
+
 Safari opens:
 
 ```text
@@ -65,6 +67,7 @@ On Safari only, v3.3 calls `unload()` on the existing SoundManager sound after S
 ├── docs/
 │   ├── SAFARI-TEST-REPORT.md
 │   ├── VU-OPERATIONS.md
+│   ├── WHY-SAFARI-NEEDS-SERVER-VU.md
 │   └── WORDPRESS-COPY-PASTE.md
 ├── server-vu/
 │   ├── README.md

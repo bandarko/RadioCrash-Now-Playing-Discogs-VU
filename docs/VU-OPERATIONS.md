@@ -12,6 +12,8 @@ CSS u WordPress administraciji:
 
 VU nije zaseban WordPress plugin. Nalazi se na dnu istog JavaScript zapisa kao “Sada slušate”.
 
+Detaljno objašnjenje zašto Safari treba serverski numeric-only feed, kako je isključen CORS problem i zašto sinkronizacija ne može biti potpuno jednaka lokalnom Chrome analyseru nalazi se u [`WHY-SAFARI-NEEDS-SERVER-VU.md`](WHY-SAFARI-NEEDS-SERVER-VU.md).
+
 ## Kako radi
 
 - Chrome, Firefox i Brave: Web Audio analizira audio element postojećeg SoundManager2 playera.
