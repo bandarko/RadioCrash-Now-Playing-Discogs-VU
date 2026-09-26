@@ -1,8 +1,8 @@
 # Zašto Safari treba serverski VU
 
-Status dokumenta: 25. 9. 2026.
+Status dokumenta: 26. 9. 2026.
 
-Aktivna implementacija: `hybrid real VU v3.3 Safari live-match`
+Aktivna implementacija: `hybrid real VU v3.5 time-normalized decay`
 
 ## Kratki odgovor
 
@@ -36,7 +36,7 @@ Lokalna grana koristi:
 - odvojene lijevi i desni kanal;
 - RMS vremenskog signala;
 - gain `24`;
-- trenutačan attack i decay `0.3` samo pri padu;
+- trenutačan attack i vremenski normaliziran decay samo pri padu;
 - `requestAnimationFrame` za crtanje.
 
 Najvažnija prednost tog puta jest sinkronizacija: analyser čita dekodirane uzorke iz istog playera i istog lokalnog media clocka koji proizvode zvuk. Mrežni i player buffer već su uključeni u signal koji analyser vidi.
@@ -99,9 +99,9 @@ Servis `rc-vu.service` otvara jednu lokalnu vezu prema `http://127.0.0.1:8000/li
 
 - `rmsDbL` i `rmsDbR`;
 - `peakDbL` i `peakDbR`;
-- 60 mjerenja u sekundi;
+- 120 mjerenja u sekundi;
 - zadnjih 256 stereo frameova po mjerenju;
-- red razina od 1,10 sekundi (66 mjerenja) za približno poravnanje s reprodukcijskim bufferom.
+- red razina od 1,10 sekundi (132 mjerenja) za približno poravnanje s reprodukcijskim bufferom.
 
 Nginx javno izlaže samo:
 
@@ -133,7 +133,7 @@ Safari, mreža i SoundManager mogu dinamički mijenjati količinu audio buffera.
 Zbog toga se mogu primijetiti male razlike:
 
 - Safari VU može malo kasniti ili uraniti u odnosu na zvuk;
-- lokalni Chrome VU može izgledati mrvicu življe;
+- lokalni Chrome VU može izgledati mrvicu drukčije ako Safari odluči crtati stranicu pri nižem FPS-u;
 - kratke mrežne promjene mogu privremeno promijeniti poravnanje;
 - vrijednosti mogu biti vrlo slične, ali ne moraju u svakom frameu biti identične.
 
@@ -167,7 +167,7 @@ Same-origin proxy, `audio/aacp` i `audio/mpeg` već su testirani. Reprodukcija j
 
 ### Crtanje preko `requestAnimationFrame` u Safariju
 
-Eksperimentalna v3.4 spremala je zadnju SSE razinu i crtala je u `requestAnimationFrame`. Regresijski test bio je stabilan, ali je pokret na stvarnoj stranici izgledao tromije. Produkcija je zato vraćena na v3.3, koja crta svaku pristiglu SSE razinu izravno.
+Eksperimentalna v3.4 spremala je zadnju SSE razinu i crtala je u `requestAnimationFrame`. Regresijski test bio je stabilan, ali je pokret na stvarnoj stranici izgledao tromije. Produkcija je zato vraćena na izravno crtanje svake pristigle SSE razine. U v3.5 decay je normaliziran prema proteklom vremenu, a serverska stopa podignuta je na 120 mjerenja/s kako bi se uhvatili isti kratki vrhovi kao na Chrome/Brave analyseru. Završna produkcijska usporedba ocijenjena je vizualno jednakom.
 
 ## Kada ponovno probati lokalni Safari analyser
 

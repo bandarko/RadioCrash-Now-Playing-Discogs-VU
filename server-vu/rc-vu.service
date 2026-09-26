@@ -12,7 +12,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=RC_VU_STREAM_URL=http://127.0.0.1:8000/live.mp3
 Environment=RC_VU_LISTEN_HOST=127.0.0.1
 Environment=RC_VU_LISTEN_PORT=8767
-Environment=RC_VU_UPDATES_PER_SECOND=60
+Environment=RC_VU_UPDATES_PER_SECOND=120
 Environment=RC_VU_BUFFER_SECONDS=1.10
 Environment=RC_VU_ANALYSIS_FRAMES=256
 ExecStart=/usr/bin/python3 /opt/radiocrash-vu/rc_vu_server.py

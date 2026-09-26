@@ -3,7 +3,7 @@
  * WordPress: Custom CSS & JS → "JS 1 za Svira sada + Discogs + VU"
  * Copy/paste cijele datoteke u postojeći JavaScript zapis.
  *
- * Verzija: 2026-09-24 — hybrid real VU v3.3 Safari live-match
+ * Verzija: 2026-09-26 — hybrid real VU v3.5 time-normalized decay
  * - Now Playing i Discogs koriste postojeći WP proxy.
  * - VU ima 18 LED segmenata po kanalu.
  * - Chrome/Firefox/Brave analiziraju samo postojeći SoundManager2 player.
@@ -471,11 +471,16 @@
   let targetR = 0;
   let lastL = 0;
   let lastR = 0;
+  let lastLocalRenderAt = 0;
+  let lastServerRenderAt = 0;
   let serverLevelEvents = 0;
   const ledCache = { l: null, r: null };
   const renderedCount = { l: -1, r: -1 };
 
-  const DECAY = 0.3;
+  // Originalnih 0.3 po frameu na 120 Hz iznosi 36 LED segmenata/s.
+  // Vrijeme, a ne broj browser/SSE frameova, sada određuje brzinu pada.
+  const DECAY_PER_SECOND = 36;
+  const MAX_DECAY_STEP_SECONDS = 0.1;
   const LOCAL_GAIN = 24;
 
   function log(...args) {
@@ -560,6 +565,8 @@
     targetR = 0;
     lastL = 0;
     lastR = 0;
+    lastLocalRenderAt = 0;
+    lastServerRenderAt = 0;
     setLevel("l", 0);
     setLevel("r", 0);
   }
@@ -764,9 +771,14 @@
   function renderSafariServerLevel() {
     // Safari zna usporiti ili potpuno pauzirati requestAnimationFrame čak i dok
     // EventSource uredno prima podatke. Crtanje na samom SSE događaju daje isti
-    // ritam kao Chrome analyser: jedan novi stereo uzorak otprilike svakih 16 ms.
-    lastL = approachLevel(lastL, targetL);
-    lastR = approachLevel(lastR, targetR);
+    // ritam kao Chrome analyser: jedan novi stereo uzorak otprilike svakih 8 ms.
+    const now = performance.now();
+    const elapsedSeconds = lastServerRenderAt
+      ? Math.min(MAX_DECAY_STEP_SECONDS, Math.max(0, (now - lastServerRenderAt) / 1000))
+      : 1 / 60;
+    lastServerRenderAt = now;
+    lastL = approachLevel(lastL, targetL, elapsedSeconds);
+    lastR = approachLevel(lastR, targetR, elapsedSeconds);
     setLevel("l", lastL);
     setLevel("r", lastR);
   }
@@ -777,6 +789,7 @@
       eventSource = null;
     }
     lastServerEventAt = 0;
+    lastServerRenderAt = 0;
   }
 
   function openServerFeed() {
@@ -892,14 +905,25 @@
     return Math.sqrt(sum / dataArray.length);
   }
 
-  function approachLevel(current, target) {
-    // Kao originalni Chrome VU: napad je trenutačan, samo pad ima decay.
+  function approachLevel(current, target, elapsedSeconds) {
+    // Napad je trenutačan. Pad je vremenski normaliziran pa 120 Hz Safari SSE
+    // i 120 Hz Brave/Chrome requestAnimationFrame imaju isti odziv.
     if (target >= current) return target;
-    return Math.max(target, current - DECAY);
+    const seconds = Math.min(
+      MAX_DECAY_STEP_SECONDS,
+      Math.max(0, Number(elapsedSeconds) || 0)
+    );
+    return Math.max(target, current - DECAY_PER_SECOND * seconds);
   }
 
   function frame() {
     if (!active) return;
+
+    const now = performance.now();
+    const elapsedSeconds = lastLocalRenderAt
+      ? Math.min(MAX_DECAY_STEP_SECONDS, Math.max(0, (now - lastLocalRenderAt) / 1000))
+      : 1 / 120;
+    lastLocalRenderAt = now;
 
     if (analyserL && analyserR && dataArrayL && dataArrayR) {
       analyserL.getByteTimeDomainData(dataArrayL);
@@ -907,11 +931,11 @@
 
       const measuredL = Math.max(0, Math.min(18, getRms(dataArrayL) * LOCAL_GAIN));
       const measuredR = Math.max(0, Math.min(18, getRms(dataArrayR) * LOCAL_GAIN));
-      lastL = approachLevel(lastL, measuredL);
-      lastR = approachLevel(lastR, measuredR);
+      lastL = approachLevel(lastL, measuredL, elapsedSeconds);
+      lastR = approachLevel(lastR, measuredR, elapsedSeconds);
     } else {
-      lastL = approachLevel(lastL, 0);
-      lastR = approachLevel(lastR, 0);
+      lastL = approachLevel(lastL, 0, elapsedSeconds);
+      lastR = approachLevel(lastR, 0, elapsedSeconds);
     }
 
     setLevel("l", lastL);

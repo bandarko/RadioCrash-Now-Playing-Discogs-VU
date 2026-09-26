@@ -14,7 +14,7 @@ WordPress lokacija:
 4. Zamijeni ga cijelim sadržajem datoteke `now-playing-discogs-vu.js`.
 5. Spremi zapis.
 
-JavaScript sadrži postojeći Now Playing/Discogs dio i **hybrid real VU v3.3 Safari live-match**:
+JavaScript sadrži postojeći Now Playing/Discogs dio i **hybrid real VU v3.5 time-normalized decay**:
 
 - Chrome, Firefox i Brave analiziraju isključivo audio element postojećeg SoundManager2 playera.
 - Safari otvara `EventSource` prema `https://live.radiocrash.net/vu/events` i prima samo stvarne brojčane L/R razine.
@@ -22,10 +22,10 @@ JavaScript sadrži postojeći Now Playing/Discogs dio i **hybrid real VU v3.3 Sa
 - EventSource je otvoren samo dok glavni player svira i zatvara se na Stop.
 - Safari čeka stvarni `playing` događaj; VU zato ne kreće tijekom sporog učitavanja streama.
 - Safari dBFS pretvara istom RMS formulom i gainom `24` kao Chrome/Firefox/Brave.
-- Safari feed radi na 60 mjerenja/s, koristi isti kratki prozor od 256 uzoraka kao Chrome i produkcijski kalibriran serverski pomak od 1,10 s.
+- Safari feed radi na 120 mjerenja/s, koristi isti kratki prozor od 256 uzoraka kao Chrome i produkcijski kalibriran serverski pomak od 1,10 s.
 - Safari crta svaku pristiglu stvarnu SSE razinu izravno; to se na produkcijskoj stranici pokazalo življim od naknadno iskušanog `requestAnimationFrame` raspoređivanja.
 - Stop stvarno radi `unload()` postojećeg SoundManager streama, pa sljedeći Play ne nastavlja stari AAC buffer.
-- Napad LED-ica je trenutačan kao u Chromeu; decay se primjenjuje samo pri padu.
+- Napad LED-ica je trenutačan kao u Chromeu; decay se primjenjuje samo pri padu i računa prema stvarno proteklom vremenu.
 - LED DOM se mijenja samo kada se stvarno promijeni broj upaljenih segmenata.
 - Na ekranima do 900 px VU se ne inicijalizira.
 
@@ -61,4 +61,4 @@ Ponovi Play/Stop provjeru na Chromeu, Firefoxu i Braveu. Na uređajima/viewportu
 
 Izolirani test u stvarnom Safariju 26.6.2 potvrdio je `server-safari` način i 5/5 uzastopnih Stop/Play ciklusa: pet SSE veza, stvarne odvojene L/R razine, pet zatvaranja starog streama, bez greške te povratak na 0/0 nakon svakog Stop.
 
-Server v3.3 s 60 mjerenja/s i 256-frame analizom uključen je 24. 9. 2026. WordPress JS v3.3 također je potvrđen na produkciji. Kratko iskušana v3.4 frame-sync varijanta odbačena je jer je na stvarnoj Safari stranici izgledala tromije.
+Server s početnih 60 mjerenja/s i 256-frame analizom uključen je 24. 9. 2026. Kratko iskušana v3.4 frame-sync varijanta odbačena je jer je na stvarnoj Safari stranici izgledala tromije. WordPress JS v3.5 i serverskih 120 mjerenja/s potvrđeni su 26. 9. 2026.; završna usporedba Safarija i Chromea izgledala je jednako.

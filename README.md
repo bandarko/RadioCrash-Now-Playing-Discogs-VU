@@ -16,16 +16,16 @@ Verified on 26 September 2026:
 
 | Component | Current version / configuration |
 | --- | --- |
-| WordPress JavaScript | `hybrid real VU v3.3 Safari live-match` |
+| WordPress JavaScript | `hybrid real VU v3.5 time-normalized decay` |
 | WordPress CSS | documented production styling |
 | Chrome / Firefox / Brave | local Web Audio analyser, `fftSize=256` |
 | Safari | real numeric stereo levels over SSE |
-| Server update rate | 60 measurements per second |
+| Server update rate | 120 measurements per second |
 | Server analysis window | latest 256 stereo frames |
-| Alignment buffer | 1.10 seconds (66 measurements) |
+| Alignment buffer | 1.10 seconds (132 measurements) |
 | VU layout | 18 LED segments per channel; disabled at 900 px and below |
 
-The short-lived v3.4 `requestAnimationFrame` display-sync experiment was rejected after production testing because its movement looked slower in Safari. The repository therefore intentionally contains the better v3.3 direct-SSE renderer.
+The short-lived v3.4 `requestAnimationFrame` display-sync experiment was rejected after production testing because its movement looked slower in Safari. Version v3.5 keeps direct SSE rendering, normalizes LED decay by elapsed time and uses a 120 Hz server feed to match the response of Chrome/Brave on a ProMotion display.
 
 ## Architecture
 
@@ -47,13 +47,13 @@ https://live.radiocrash.net/vu/events
 
 only after the real player emits `playing`, and closes it on Stop. The SSE endpoint is numeric data, not audio.
 
-The v3.3 server analyses the latest 256 stereo frames 60 times per second. The browser uses the same RMS-to-LED calculation and gain (`24`) as the local Chrome/Firefox/Brave implementation.
+The server analyses the latest 256 stereo frames 120 times per second. The browser uses the same RMS-to-LED calculation and gain (`24`) as the local Chrome/Firefox/Brave implementation.
 
 ### Safari Stop/Start fix
 
 The Vice theme pauses its infinite AAC SoundManager stream on Stop. Replaying that stale paused object in Safari can produce skipping, digital artefacts or silence after repeated Stop/Start cycles.
 
-On Safari only, v3.3 calls `unload()` on the existing SoundManager sound after Stop. The next Play reloads a fresh live connection on the same player object. No additional `Audio` object or browser audio stream is created.
+On Safari only, the current client calls `unload()` on the existing SoundManager sound after Stop. The next Play reloads a fresh live connection on the same player object. No additional `Audio` object or browser audio stream is created.
 
 ## Repository structure
 
@@ -77,6 +77,7 @@ On Safari only, v3.3 calls `unload()` on the existing SoundManager sound after S
 │   ├── rc_vu_server.py
 │   ├── rollback.sh
 │   ├── tune-buffer.sh
+│   ├── tune-rate.sh
 │   └── upgrade-v3-3.sh
 └── tests/
     ├── harness_server.py
@@ -122,7 +123,7 @@ The upgrade script:
 - validates the Python and systemd sources;
 - backs up the installed program and service unit;
 - restarts only `rc-vu.service`;
-- verifies 60 Hz, 1.10 seconds and 256-frame analysis;
+- verifies 120 Hz, 1.10 seconds and 256-frame analysis;
 - automatically restores the previous version if validation fails.
 
 It does not restart Nginx, Shoutcast or the host. See [`server-vu/README.md`](server-vu/README.md) for first installation and rollback details.
@@ -140,7 +141,7 @@ The final isolated Safari 26.6.2 regression test completed five consecutive Stop
 - zero SSE errors;
 - 0/0 LEDs and a closed SSE connection after every Stop.
 
-The staging server produced 59.99 updates/s. During that test Python used approximately 2.6% CPU and 18.7 MB RSS; FFmpeg used approximately 1.2% CPU and 47.9 MB RSS.
+The accepted production configuration runs at 120 updates/s. Immediately after activation Python used approximately 4.2% CPU and 19 MB RSS; FFmpeg used approximately 0.8% CPU and 48 MB RSS. The full service cgroup used about 21 MB. A live Safari/Chrome comparison was judged visually equivalent.
 
 The full Safari investigation and version history are in [`docs/SAFARI-TEST-REPORT.md`](docs/SAFARI-TEST-REPORT.md).
 

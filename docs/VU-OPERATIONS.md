@@ -1,4 +1,4 @@
-# Radio Crash hybrid VU v3.3 — Safari live-match
+# Radio Crash hybrid VU v3.5 — time-normalized live-match
 
 ## Gdje se nalazi kod
 
@@ -23,10 +23,10 @@ Detaljno objašnjenje zašto Safari treba serverski numeric-only feed, kako je i
 - SSE veza postoji samo dok glavni player svira.
 - Safari čeka stvarni `playing` događaj, pa VU ne kreće prije zvuka.
 - Safari koristi istu RMS skalu i gain `24` kao ostali desktop preglednici.
-- Serverski feed šalje 60 mjerenja u sekundi, analizira zadnjih 256 stereo uzoraka i koristi 1,10 s vremenskog pomaka (66 mjerenja).
+- Serverski feed šalje 120 mjerenja u sekundi, analizira zadnjih 256 stereo uzoraka i koristi 1,10 s vremenskog pomaka (132 mjerenja).
 - Safari crta svaku pristiglu stvarnu SSE razinu izravno. Naknadno iskušano vezivanje uz `requestAnimationFrame` nije zadržano jer je na produkcijskoj stranici izgledalo tromije.
 - Stop radi `unload()` postojećeg SoundManager objekta, pa svaki novi Play dobiva svjež AAC live stream bez preskakanja i digitalnih artefakata.
-- Rast razine je trenutačan kao u Chromeu; samo pad LED-ica ima kratki decay.
+- Rast razine je trenutačan kao u Chromeu; samo pad LED-ica ima kratki decay normaliziran proteklim vremenom, ne brojem browser frameova.
 - LED klase mijenjaju se samo kad se promijeni broj aktivnih segmenata, radi manjeg opterećenja Safarija.
 - VU ima 18 segmenata po kanalu i potpuno je isključen do širine 900 px.
 
@@ -50,4 +50,4 @@ Nakon spremanja napravi hard refresh.
 4. Chrome, Firefox i Brave: postojeći lokalni VU i dalje radi.
 5. Mobitel ili viewport do 900 px: nema VU elementa ni SSE veze.
 
-Server-side servis i javni endpoint instalirani su 24. 9. 2026. Produkcijska konfiguracija 26. 9. 2026. potvrđena je na 60,0 poruka/s, 256-frame analizi i 1,10 s bufferu. Vrijednost je dobivena postupnim produkcijskim A/B podešavanjem s 1,50 preko 1,25 na 1,10 s. Izolirani Safari 26.6.2 test prošao je 5/5 uzastopnih Stop/Play ciklusa bez greške, duplog audio streama ili zaostalog AAC buffera.
+Server-side servis i javni endpoint instalirani su 24. 9. 2026. Produkcijska konfiguracija 26. 9. 2026. potvrđena je na 120 poruka/s, 256-frame analizi i 1,10 s bufferu. Buffer je dobiven postupnim A/B podešavanjem s 1,50 preko 1,25 na 1,10 s; stopa je zatim podignuta sa 60 na 120 mjerenja/s kako bi kratki vrhovi i odziv odgovarali Chromeu/Braveu na 120 Hz zaslonu. U završnoj usporedbi Safari i Chrome izgledali su jednako. Izolirani Safari 26.6.2 test prošao je 5/5 uzastopnih Stop/Play ciklusa bez greške, duplog audio streama ili zaostalog AAC buffera.

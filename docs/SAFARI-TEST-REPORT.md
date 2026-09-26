@@ -90,4 +90,10 @@ Zato je v3.4 odbačen i klijentski kod vraćen na izravno crtanje svakog SSE dog
 
 Javni SSE transport ponovno je provjeren na 60 poruka/s bez rupa, rastućeg reda ili mrežnog zaostatka. Produkcijska usporedba pokazala je da 1,50 s fiksnog buffera u Safariju malo kasni za čujnim signalom. Vrijednost 1,25 s bila je bolja, a 1,10 s prihvaćena je kao dobro vizualno poravnanje.
 
-Aktivna konfiguracija zato koristi 66 mjerenja pri 60 mjerenja/s, odnosno 1,10 s. To je empirijska vrijednost: Safari i dalje može dinamički promijeniti vlastiti audio-buffer, pa rješenje nije sample-accurate. Pokušaj automatskog poravnanja sa zasebno pokrenutim Brave playerom nije korišten za promjenu konfiguracije jer svaki preglednik reproducira vlastitu poziciju live streama i izmjerena korelacija nije bila dovoljno pouzdana.
+Tadašnja konfiguracija zato je koristila 66 mjerenja pri 60 mjerenja/s, odnosno 1,10 s. To je empirijska vrijednost: Safari i dalje može dinamički promijeniti vlastiti audio-buffer, pa rješenje nije sample-accurate. Pokušaj automatskog poravnanja sa zasebno pokrenutim Brave playerom nije korišten za promjenu konfiguracije jer svaki preglednik reproducira vlastitu poziciju live streama i izmjerena korelacija nije bila dovoljno pouzdana.
+
+## Time-normalized decay i 120 Hz završno usklađivanje — v3.5
+
+Na ProMotion zaslonu Chrome/Brave lokalni analyser crta približno 120 puta/s, dok je Safari serverski put dotad primao 60 mjerenja/s. Zato je decay u v3.5 promijenjen iz fiksnih `0.3` segmenata po frameu u vremenski normaliziranih 36 segmenata/s, bez promjene trenutačnog attacka, gaina ili RMS skale.
+
+Serverska stopa zatim je podignuta sa 60 na 120 mjerenja/s, uz isti prozor od 256 stereo frameova i isti buffer od 1,10 s. Red zato sadrži 132 mjerenja. Produkcijski servis ostao je stabilan: Python je neposredno nakon promjene koristio približno 4,2 % CPU-a, FFmpeg 0,8 %, a cijeli servis oko 21 MB memorije. Završna usporedba u Safariju i Chromeu ocijenjena je vizualno jednakom.
