@@ -1,190 +1,188 @@
-# Zašto Safari treba serverski VU
+# Why Safari needs a server-side VU feed
 
-Status dokumenta: 26. 9. 2026.
+Last verified: 26 September 2026
 
-Aktivna implementacija: `hybrid real VU v3.5 time-normalized decay`
+Active implementation: `hybrid real VU v3.5 time-normalized decay`
 
-## Kratki odgovor
+## Short answer
 
-Chrome, Firefox i Brave dopuštaju da Web Audio API analizira dekodirani signal iz istog `HTMLAudioElement` elementa koji korisnik sluša. Zato njihov VU mjeri upravo one audio uzorke koji u tom trenutku odlaze prema zvučnicima.
+Chrome, Firefox and Brave allow Web Audio to analyse decoded samples from the same `HTMLAudioElement` the listener hears. Their VU meter can therefore measure audio on the player's local media clock.
 
-Safari uredno reproducira Radio Crash live stream, ali u testiranom WebKit putu ne predaje uzorke kontinuiranog Shoutcast/Icecast streama u `MediaElementAudioSourceNode`. `AnalyserNode` zato dobiva niz nula i lokalni VU ostaje ugašen, iako se glazba čuje.
+In the tested Safari/WebKit path, the Radio Crash continuous Shoutcast/Icecast stream plays normally but `MediaElementAudioSourceNode` does not expose usable samples to `AnalyserNode`. Both byte and floating-point analyser reads return silence.
 
-Radio Crash u Safariju zato koristi jedan FFmpeg analizator na streaming serveru. On iz istog izvornog programa izračunava stvarne lijeve i desne razine, a Safari prima samo male brojčane poruke preko Server-Sent Eventsa (SSE). U Safariju se ne otvara drugi audio stream i ne generira se nasumična ili unaprijed zadana animacija.
+Safari therefore uses one shared FFmpeg analyser on the streaming server. It calculates real stereo levels from the same program source and sends only compact numeric L/R values to Safari through Server-Sent Events (SSE). The browser still has exactly one audible audio player and one audio stream.
 
-## Uobičajeni put u Chromeu, Firefoxu i Braveu
+## Normal path in Chrome, Firefox and Brave
 
 ```text
-postojeći SoundManager2 player
+existing SoundManager2 player
         │
-        └─ HTMLAudioElement koji korisnik sluša
+        └─ HTMLAudioElement heard by the listener
                │
                └─ MediaElementAudioSourceNode
                       │
                       └─ ChannelSplitterNode
-                           ├─ lijevi AnalyserNode
-                           └─ desni AnalyserNode
+                           ├─ left AnalyserNode
+                           └─ right AnalyserNode
                                   │
-                                  └─ RMS → gain 24 → 18 LED segmenata
+                                  └─ RMS → gain 24 → 18 LED segments
 ```
 
-`createMediaElementSource()` veže Web Audio graf na postojeći player. Kod ne stvara novi `Audio` objekt, ne mijenja URL streama i ne pokreće dodatnu reprodukciju.
+`createMediaElementSource()` attaches the Web Audio graph to the existing player. The code does not create another `Audio` object, replace the stream URL or call `play()` on a second element.
 
-Lokalna grana koristi:
+The local path uses:
 
 - `fftSize = 256`;
-- odvojene lijevi i desni kanal;
-- RMS vremenskog signala;
+- separate left and right channels;
+- time-domain RMS;
 - gain `24`;
-- trenutačan attack i vremenski normaliziran decay samo pri padu;
-- `requestAnimationFrame` za crtanje.
+- immediate attack and elapsed-time-normalized decay;
+- `requestAnimationFrame` for reading and rendering the local analyser.
 
-Najvažnija prednost tog puta jest sinkronizacija: analyser čita dekodirane uzorke iz istog playera i istog lokalnog media clocka koji proizvode zvuk. Mrežni i player buffer već su uključeni u signal koji analyser vidi.
+Because the analyser and audible signal share one player and one media clock, browser buffering is already reflected in the samples being measured.
 
-## Što se događa u Safariju
+## What happens in Safari
 
-U Safariju je potvrđeno sljedeće:
+The following was confirmed in Safari:
 
-- `HTMLAudioElement` reproducira stream i njegovo vrijeme napreduje;
-- `AudioContext` je u stanju `running`;
-- Web Audio graf se može stvoriti;
-- `getByteTimeDomainData()` i `getFloatTimeDomainData()` ipak vraćaju samo nule za kontinuirani stream;
-- ista VU matematika ispravno radi s konačnom WAV datotekom.
+- the `HTMLAudioElement` plays and its current time advances;
+- `AudioContext.state` is `running`;
+- the Web Audio graph can be constructed;
+- `getByteTimeDomainData()` and `getFloatTimeDomainData()` return silence for the continuous stream;
+- the same analyser, RMS and LED code works with a finite WAV file.
 
-Praktični rezultat jest da Safari ima reprodukciju, ali JavaScript nema stvarne PCM uzorke potrebne za izračun VU-a.
+The practical result is playback without usable PCM samples in JavaScript.
 
-To je u skladu s dugotrajnim [WebKit bugom 180696](https://bugs.webkit.org/show_bug.cgi?id=180696). Prijava opisuje HLS i Icecast tokove koji sviraju u Safariju, ali nisu pravilno dostupni Web Audio grafu; na istoj prijavi postoje i noviji izvještaji o analyseru koji vraća nule. Status prijave bio je `NEW` pri posljednjoj provjeri ovog dokumenta.
+This matches [WebKit bug 180696](https://bugs.webkit.org/show_bug.cgi?id=180696), reported for HLS and other streaming protocols including Icecast. The issue describes streams that play while Web Audio effects or analysis do not receive the media signal. Its status remained `NEW` when checked on 26 September 2026.
 
-Prema [Web Audio specifikaciji za `MediaElementAudioSourceNode`](https://webaudio.github.io/web-audio-api/#MediaElementAudioSourceNode), audio iz media elementa treba biti preusmjeren kroz Web Audio graf. Specifikacija također zahtijeva tišinu kada je izvor označen kao CORS-cross-origin, radi zaštite sadržaja. Radio Crash slučaj nije zaključen kao obična CORS blokada jer su testirani ispravni CORS headeri i same-origin proxy, a rezultat kontinuiranog streama i dalje je bio niz nula.
+The [Web Audio specification for `MediaElementAudioSourceNode`](https://webaudio.github.io/web-audio-api/#MediaElementAudioSourceNode) defines media-element audio as the node's source. It also requires silence for cross-origin media that is not CORS-enabled. The Radio Crash failure was not treated as a simple CORS mistake because correct CORS headers, a same-origin proxy and alternate MIME types were all tested without restoring analyser data.
 
-## Kako je isključen problem u našem kodu
+## Evidence that the application code was not the cause
 
-| Test u Safariju | Reprodukcija | Rezultat analysera |
+| Safari test | Playback | Analyser result |
 | --- | --- | --- |
-| Radio Crash stream izravno | radi | samo nule |
-| Isti stream preko same-origin proxyja kao `audio/aacp` | radi | samo nule |
-| Isti stream preko same-origin proxyja kao `audio/mpeg` | radi | samo nule |
-| Lokalno generirani kontinuirani MP3 stream | radi | samo nule |
-| Konačna stereo WAV datoteka | radi | stvarne vrijednosti |
+| Radio Crash stream directly | works | silence only |
+| Same stream through a same-origin proxy as `audio/aacp` | works | silence only |
+| Same stream through the proxy as `audio/mpeg` | works | silence only |
+| Locally generated continuous MP3 stream | works | silence only |
+| Finite stereo WAV file | works | real values |
 
-Dodatno je provjereno:
+The investigation also verified:
 
-- `crossOrigin="anonymous"` postavljen je prije `src`;
-- streaming odgovor ima odgovarajući `Access-Control-Allow-Origin`;
-- testirani su byte i float podaci analysera;
-- analyser je bio spojen u obaveznu audio signalnu putanju;
-- L/R RMS račun, gain i LED prikaz rade s konačnom datotekom;
-- promjena MIME zaglavlja nije popravila live analyser.
+- `crossOrigin="anonymous"` was assigned before `src`;
+- the stream sent a matching `Access-Control-Allow-Origin` header;
+- both byte and float analyser APIs were tested;
+- the analyser was placed in the required audio signal path;
+- L/R splitting, RMS calculation, gain and LEDs worked with finite media;
+- changing the MIME header did not fix live-stream analysis.
 
-Zbog toga uzrok nije CSS, LED renderer, RMS formula, pogrešan kanal, samo vrijeme pokretanja ni uobičajena CORS konfiguracija. Ograničenje se pojavljuje kada WebKit reproducira kontinuirani stream kroz svoj media put, ali ga ne izlaže lokalnom Web Audio analyseru.
+This ruled out the LED renderer, RMS calculation, channel selection, CSS, startup order and ordinary CORS configuration as the primary cause.
 
-## Odabrana Safari arhitektura
+## Selected Safari architecture
 
 ```text
                            ┌─ Chrome / Firefox / Brave
-Shoutcast live.mp3 ──────┤  postojeći browser player → lokalni Web Audio VU
+Shoutcast live.mp3 ────────┤  existing browser player → local Web Audio VU
                            │
-                           └─ streaming server
-                                └─ jedan FFmpeg decoder
+                           └─ streaming host
+                                └─ one shared FFmpeg decoder
                                      └─ PCM L/R RMS + peak
-                                          └─ 1,10 s red razina
-                                               └─ SSE brojke
+                                          └─ 1.10 s level queue
+                                               └─ numeric SSE events
                                                     └─ Safari LED VU
 
-Safari zvuk: postojeći browser player → zvučnici
-Safari VU:   SSE brojke → LED prikaz
+Safari audio: existing browser player → speakers
+Safari VU:    numeric SSE data → LED display
 ```
 
-Servis `rc-vu.service` otvara jednu lokalnu vezu prema `http://127.0.0.1:8000/live.mp3`. FFmpeg dekodira stereo signal u 44,1 kHz `pcm_s16le`, a Python servis računa:
+`rc-vu.service` opens one local connection to `http://127.0.0.1:8000/live.mp3`. FFmpeg decodes 44.1 kHz stereo `pcm_s16le`; the Python service calculates:
 
-- `rmsDbL` i `rmsDbR`;
-- `peakDbL` i `peakDbR`;
-- 120 mjerenja u sekundi;
-- zadnjih 256 stereo frameova po mjerenju;
-- red razina od 1,10 sekundi (132 mjerenja) za približno poravnanje s reprodukcijskim bufferom.
+- `rmsDbL` and `rmsDbR`;
+- `peakDbL` and `peakDbR`;
+- 120 measurements/s;
+- the latest 256 stereo frames per measurement;
+- a 1.10-second queue containing 132 measurements.
 
-Nginx javno izlaže samo:
+Nginx exposes only:
 
-- `https://live.radiocrash.net/vu/events` — SSE razine;
-- `https://live.radiocrash.net/vu/status` — status servisa.
+- `https://live.radiocrash.net/vu/events` — numeric SSE levels;
+- `https://live.radiocrash.net/vu/status` — service health and configuration.
 
-Servis ne snima audio, ne sprema ga na disk i ne prosljeđuje audio posjetiteljima. SSE sadrži samo JSON brojeve.
+The service does not record audio, store it on disk or send audio to website visitors.
 
-## Zašto ovo nije drugi stream u Safariju
+## Why this is not a second Safari audio stream
 
-Audio veza i VU veza imaju različite uloge:
+The two connections have different purposes:
 
-- postojeći SoundManager2 `HTMLAudioElement` jedini preuzima i reproducira zvuk u pregledniku;
-- `EventSource` preuzima samo tekstualne L/R vrijednosti;
-- u Safari grani nema `new Audio()`, dodatnog audio `src`, ni dodatnog `play()` poziva;
-- jedan serverski FFmpeg proces dijele svi Safari posjetitelji, umjesto da svaki posjetitelj pokreće još jedan audio download.
+- the existing SoundManager2 `HTMLAudioElement` is the only browser connection that downloads and plays audio;
+- `EventSource` downloads small text messages containing L/R numbers;
+- the Safari branch contains no `new Audio()`, secondary audio `src` or second `play()` call;
+- all Safari visitors share one server-side FFmpeg process instead of each visitor opening a second audio download.
 
-To izbjegava dupli zvuk, udvostručen promet prema streamu i dvije reprodukcije koje bi se međusobno razilazile.
+This avoids duplicate sound, duplicate stream bandwidth and two independent players drifting apart.
 
-## Zašto Safari VU može malo odstupati od Chromea
+## Timing and visual response
 
-Chromeov analyser i zvuk koriste isti lokalni media clock. Safari VU i Safari zvuk koriste dva vremenska puta:
+Chrome's analyser and its audible audio share the same local media clock. Safari uses two timing paths:
 
-1. browser samostalno buffera i reproducira audio;
-2. server analizira isti program blizu izvora, zatim odgađa brojčane razine za fiksnih 1,10 sekundi i šalje ih mrežom.
+1. the browser buffers and plays the audio stream;
+2. the server analyses the program near its source, delays numeric levels by 1.10 seconds and sends them over SSE.
 
-Safari, mreža i SoundManager mogu dinamički mijenjati količinu audio buffera. SSE nema pristup točnom trenutku uzorka koji Safari upravo šalje prema zvučnicima, pa fiksnih 1,10 sekundi predstavlja praktično, produkcijski izmjereno poravnanje, a ne sample-accurate sinkronizaciju. Vrijednost je 26. 9. 2026. podešena s 1,50 preko 1,25 na 1,10 s prema stvarnoj Safari reprodukciji.
+Safari, the network and SoundManager can change playback buffering dynamically. The SSE connection cannot ask Safari which exact sample is currently reaching the speakers. The 1.10-second delay is therefore an empirically calibrated alignment, not sample-accurate synchronization.
 
-Zbog toga se mogu primijetiti male razlike:
+The final response matching required two additional choices:
 
-- Safari VU može malo kasniti ili uraniti u odnosu na zvuk;
-- lokalni Chrome VU može izgledati mrvicu drukčije ako Safari odluči crtati stranicu pri nižem FPS-u;
-- kratke mrežne promjene mogu privremeno promijeniti poravnanje;
-- vrijednosti mogu biti vrlo slične, ali ne moraju u svakom frameu biti identične.
+- decay is expressed as 36 LED segments/s instead of a fixed amount per browser frame;
+- the server publishes 120 measurements/s so it captures short peaks at the same cadence as the tested Chrome/Brave analyser on a ProMotion display.
 
-To nije fake VU: vrijednosti su stvarno izračunate iz istog stereo programa. Razlika je u mjestu mjerenja i vremenskom putu.
+The final production comparison was judged visually equivalent. Small temporary differences can still occur if Safari changes its audio buffer, reduces page rendering frequency or experiences network jitter.
 
-## Pokretanje i zaustavljanje u Safariju
+## Safari player lifecycle
 
-SSE veza ne otvara se na prvi `play` zahtjev, nego tek nakon stvarnog `playing` događaja glavnog playera. Tako VU ne kreće prije zvuka dok Safari još puni početni buffer.
+The SSE connection opens only after the existing player emits `playing`. This prevents the VU from moving while Safari is still filling its initial audio buffer.
 
-Na Stop se:
+On Stop, the client:
 
-1. zatvara `EventSource`;
-2. LED vraća na 0/0;
-3. postojećem SoundManager soundu poziva `unload()`.
+1. closes `EventSource`;
+2. resets both LED channels to zero;
+3. calls `unload()` on the existing SoundManager sound.
 
-`unload()` je potreban jer je tema prije toga samo pauzirala beskonačni AAC stream. Ponovno korištenje takvog starog Safari buffera nakon više Stop/Play ciklusa uzrokovalo je preskakanje, digitalne artefakte ili nestanak zvuka. Sljedeći Play otvara svježu vezu na istom player objektu; ne stvara drugi player.
+The unload is necessary because the theme otherwise pauses an infinite AAC stream and may later resume stale compressed data. Repeated reuse caused skipping, digital artifacts or silence. The next Play creates a fresh network connection on the same SoundManager player object; it does not create another player.
 
-## Zašto nisu odabrane druge varijante
+## Rejected alternatives
 
-### Fake animacija
+### Fake animation
 
-Ne prati glazbu, ne prikazuje stvarni stereo signal i korisniku daje pogrešan dojam. Korištena je samo kao privremeni fallback tijekom ranog razvoja i nije dio sadašnjeg rješenja.
+A fake meter does not represent the music or stereo image. It was used only as a temporary early fallback and is not part of the production solution.
 
-### Drugi audio element samo za analyser
+### A second audio element for analysis
 
-Mogao bi otvoriti još jedan stream, proizvesti dupli zvuk ili dodatno opteretiti streaming server. Dva nezavisna playera ne bi ostala pouzdano sinkronizirana. Ova je varijanta namjerno zabranjena pravilom “existing player only”.
+A second element could create duplicate sound and stream traffic. Independent players would also drift and would not provide reliable synchronization. The project therefore enforces an “existing player only” rule.
 
-### Browser proxy ili promjena MIME tipa
+### Same-origin proxy or MIME-only changes
 
-Same-origin proxy, `audio/aacp` i `audio/mpeg` već su testirani. Reprodukcija je radila, ali Safari analyser i dalje je vraćao nule.
+Both were tested. Playback continued to work, but Safari's analyser still returned silence.
 
-### Crtanje preko `requestAnimationFrame` u Safariju
+### Safari rendering through `requestAnimationFrame`
 
-Eksperimentalna v3.4 spremala je zadnju SSE razinu i crtala je u `requestAnimationFrame`. Regresijski test bio je stabilan, ali je pokret na stvarnoj stranici izgledao tromije. Produkcija je zato vraćena na izravno crtanje svake pristigle SSE razine. U v3.5 decay je normaliziran prema proteklom vremenu, a serverska stopa podignuta je na 120 mjerenja/s kako bi se uhvatili isti kratki vrhovi kao na Chrome/Brave analyseru. Završna produkcijska usporedba ocijenjena je vizualno jednakom.
+The experimental v3.4 client stored the newest SSE level and rendered it on Safari's animation frame. It passed the isolated lifecycle test but looked slower on the production page. v3.5 therefore renders every incoming SSE measurement directly while keeping decay independent of event or frame count.
 
-## Kada ponovno probati lokalni Safari analyser
+## When to reconsider local Web Audio in Safari
 
-Serverski put treba zadržati dok novi Safari/WebKit ne prođe sve ove provjere na stvarnom Radio Crash streamu:
+Keep the server-side path until a new Safari/WebKit release passes all of these checks on the real Radio Crash stream:
 
-1. `getByteTimeDomainData()` ili `getFloatTimeDomainData()` vraća vrijednosti koje nisu nule;
-2. lijevi i desni kanal ostaju odvojeni;
-3. zvuk i analyser koriste isključivo postojeći player;
-4. nema drugog audio zahtjeva;
-5. najmanje pet Stop/Play ciklusa prolazi bez preskakanja, artefakata ili tišine;
-6. ponašanje je potvrđeno na produkcijskoj stranici, ne samo s konačnom audio datotekom.
+1. byte or float analyser data contains real, non-zero samples;
+2. left and right channels remain separate;
+3. playback and analysis use only the existing player;
+4. the Network panel shows no second audio request;
+5. at least five Stop/Play cycles complete without skipping, artifacts or silence;
+6. behavior is confirmed on the production page, not only with a finite audio file.
 
-Ako to bude radilo, Safari se može vratiti na isti lokalni put kao Chrome i ukloniti procijenjeno vremensko poravnanje. Do tada je serverski numeric-only feed najpouzdaniji način za stvarni stereo VU bez drugog browser audio streama.
+If all checks pass, Safari can return to the same local analyser path as Chrome and the estimated server alignment can be removed.
 
-## Povezani dokumenti
+## Related documentation
 
-- [`SAFARI-TEST-REPORT.md`](SAFARI-TEST-REPORT.md) — detaljni testovi i povijest verzija;
-- [`VU-OPERATIONS.md`](VU-OPERATIONS.md) — lokacije koda, rad i provjera;
-- [`WORDPRESS-COPY-PASTE.md`](WORDPRESS-COPY-PASTE.md) — WordPress deployment;
-- [`../server-vu/README.md`](../server-vu/README.md) — instalacija i održavanje servisa.
+- [Safari investigation and validation report](SAFARI-TEST-REPORT.md)
+- [Operations guide](VU-OPERATIONS.md)
+- [WordPress deployment](WORDPRESS-COPY-PASTE.md)
+- [Server installation and maintenance](../server-vu/README.md)

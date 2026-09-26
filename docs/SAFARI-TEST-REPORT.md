@@ -1,99 +1,158 @@
-# Radio Crash VU — Safari test i server-side rješenje
+# Radio Crash VU: Safari investigation and validation report
 
-Datum testa: 24. 9. 2026.
+This report records why the browser-side analyser was rejected in Safari, how the server-side numeric feed was validated and how the final production timing was calibrated.
 
-## Testno okruženje
+## Test objective
 
-- Safari 26.6.2 / AppleWebKit 605.1.15
-- stvarni stream: `https://live.radiocrash.net/live.mp3`
-- codec potvrđen s `ffprobe`: AAC, 44.1 kHz, stereo
-- jedan postojeći `HTMLAudioElement`
-- jedan `MediaElementAudioSourceNode`
-- dva `AnalyserNode` objekta, L i R
-- bez drugog browser audio streama i bez fake animacije
+The target was a real 18-segment stereo VU meter in Safari with all of the following constraints:
 
-## Rezultati
+- use the existing SoundManager2 player for audible playback;
+- never start a second browser audio stream;
+- preserve separate left and right channels;
+- do not use random, fake or pre-scripted animation;
+- start only when the real player is actually playing;
+- survive repeated Stop/Play cycles without skipping or digital artifacts.
 
-| Test | Reprodukcija | AudioContext | Analyser RMS | LED |
-| --- | --- | --- | --- | --- |
-| Radio Crash stream izravno | radi, vrijeme raste | `running` | `0.000000` | 0 |
-| Isti Radio Crash stream preko same-origin proxyja, `audio/aacp` | radi | `running` | `0.000000` | 0 |
-| Isti stream preko same-origin proxyja, zaglavlje `audio/mpeg` | radi | `running` | `0.000000` | 0 |
-| Lokalno generirani kontinuirani MP3 stream | radi | `running` | `0.000000` | 0 |
-| Lokalna konačna stereo WAV datoteka | radi | `running` | oko `0.32` | 13 |
+## Test environment
 
-Dodatne provjere:
+- Safari 26.6.2 / AppleWebKit 605.1.15 on macOS
+- Radio Crash production AAC stream, 44.1 kHz stereo, verified with `ffprobe`
+- one existing `HTMLAudioElement`
+- `AudioContext`, `MediaElementAudioSourceNode`, `ChannelSplitterNode` and two `AnalyserNode` instances
+- analyser `fftSize = 256`
+- CORS enabled on the stream
 
-- `crossOrigin="anonymous"` postavljen je prije `src`.
-- CORS odgovor streama sadrži `Access-Control-Allow-Origin: *`.
-- I `getByteTimeDomainData()` i `getFloatTimeDomainData()` vraćaju nulu na live streamu.
-- Spajanje analysera izravno u obaveznu audio signalnu putanju također vraća nulu.
-- Safari u ovom testu nema `HTMLMediaElement.captureStream()` alternativu.
-- Isti VU kod ispravno analizira konačnu audio datoteku, što potvrđuje da su VU računanje, LED animacija i Web Audio graph ispravni.
+## Browser-side analyser matrix
 
-## Zaključak browser-side testa
+| Source tested in Safari | Playback | AudioContext | Measured RMS | Lit LEDs |
+| --- | --- | --- | ---: | ---: |
+| Radio Crash stream directly | works; time advances | `running` | `0.000000` | 0 |
+| Same stream through a same-origin proxy as `audio/aacp` | works | `running` | `0.000000` | 0 |
+| Same proxy with `audio/mpeg` | works | `running` | `0.000000` | 0 |
+| Locally generated continuous MP3 stream | works | `running` | `0.000000` | 0 |
+| Finite local stereo WAV file | works | `running` | about `0.32` | 13 |
 
-Problem nije u Radio Crash JavaScriptu, CORS-u, vremenu spajanja ni CSS-u. Safari/WebKit ne predaje sirove uzorke kontinuiranog Icecast/Shoutcast streama u `MediaElementAudioSourceNode`; reprodukcija radi, ali analyser dobiva isključivo nule.
+Additional checks:
 
-To odgovara otvorenom WebKit problemu [180696 — createMediaElementSource() not working with Hls stream](https://bugs.webkit.org/show_bug.cgi?id=180696). Prijava izričito navodi i Icecast streamove, a noviji komentari opisuju isti slučaj: zvuk radi, dok analyser u Safariju vraća sve nule.
+- `crossOrigin="anonymous"` was assigned before `src`.
+- The stream response included `Access-Control-Allow-Origin: *`.
+- Both `getByteTimeDomainData()` and `getFloatTimeDomainData()` returned silence for the live stream.
+- Placing the analyser directly in the mandatory audio signal path did not change the result.
+- `HTMLMediaElement.captureStream()` was not available as a usable Safari fallback.
+- The identical RMS and LED code worked with a finite WAV file.
 
-## Implementirano rješenje
+## Browser-side conclusion
 
-Na streaming server instaliran je `rc-vu.service`. Jedan FFmpeg proces čita postojeći lokalni Shoutcast stream, izračunava stereo RMS/peak i objavljuje samo brojčane podatke:
+The failure was not caused by the LED renderer, RMS formula, channel splitter, CSS, startup timing or a simple missing CORS header. Safari played the continuous stream but did not expose usable PCM samples from that playback path to `MediaElementAudioSourceNode`.
 
-- `https://live.radiocrash.net/vu/status`
-- `https://live.radiocrash.net/vu/events`
+This behavior matches [WebKit bug 180696](https://bugs.webkit.org/show_bug.cgi?id=180696), which covers live HLS and Icecast-style streams that play in Safari but are not routed correctly through the Web Audio graph. The issue remained open with status `NEW` when this documentation was last verified on 26 September 2026.
 
-Servis ne snima zvuk i ne šalje audio posjetiteljima. Safari preko SSE-a prima samo JSON s L/R razinama. Chrome, Firefox i Brave i dalje koriste lokalni analyser postojećeg playera.
+## Implemented architecture
 
-## Završni Safari test
+A dedicated `rc-vu.service` runs on the streaming host:
 
-- Safari 26.6.2 / AppleWebKit 605.1.15
-- način rada: `server-safari`
-- 100 uzastopnih `level` događaja bez greške
-- stvarne vrijednosti primljene s live servera
-- LED rezultat tijekom testa: 15/15 segmenata, s daljnjim promjenama prema signalu
-- Stop: trenutačni povratak na 0/0 i zatvaranje SSE veze
-- server nakon Stop: `clients: 0`
+1. One FFmpeg process reads the existing local stream at `http://127.0.0.1:8000/live.mp3`.
+2. FFmpeg decodes it to 44.1 kHz stereo `pcm_s16le`.
+3. The Python service calculates true L/R RMS and peak values.
+4. Measurements are delayed by a fixed queue to approximate Safari's audible playback buffer.
+5. Nginx exposes compact numeric events at `https://live.radiocrash.net/vu/events`.
+6. Safari converts the reported dBFS RMS values with the same `10^(dBFS/20) × 24` mapping used by the local browser analyser.
 
-Time je za Safari ostvarena opcija 3: pravi VU bez fake animacije i bez drugog audio streama u browseru.
+The service does not record audio, write audio to disk or proxy audio to website visitors. Safari's browser receives only small JSON level messages.
 
-## Kalibracija v3.1
+## Calibration history
 
-Prva server-side verzija linearno je preslikavala raspon od -48 do -3 dBFS na 18 LED segmenata. To je tipičan glazbeni RMS od oko -14 dBFS prikazivalo previsoko, približno 14 segmenata.
+### Initial mapping
 
-Verzija v3.1 koristi istu računicu kao postojeći Chrome analyser: `10^(dBFS/20) × 24`. Na izmjerenom live signalu rezultat se promijenio s pogrešnih 12–16 na približno 3–10 segmenata. U usporednom testu Safari je pokazivao 6/7, a produkcijski Chrome 8/9 segmenata.
+The first server implementation mapped -48 to -3 dBFS linearly onto 18 LEDs. A typical music RMS near -14 dBFS therefore appeared too high, often around 14 segments.
 
-Safari sada također čeka stvarni `playing` događaj. Tijekom simuliranog sporog pokretanja ostao je na 0/0 bez SSE veze, a feed se otvorio tek kada je player zaista počeo svirati. Renderiranje je optimizirano tako da DOM mijenja samo segmente čije se stanje promijenilo.
+Version v3.1 adopted the same conversion as the existing Chrome analyser:
 
-## Low-latency v3.2
+```text
+linear RMS = 10^(dBFS / 20)
+LED level  = clamp(linear RMS × 24, 0, 18)
+```
 
-Dana 24. 9. 2026. produkcijski servis prebačen je s 10 na 25 mjerenja u sekundi, a vremenski buffer smanjen je s 5,0 na 1,5 sekundi. Javni endpoint izmjeren je na točno 25,0 poruka/s; servis je ostao stabilan i bez grešaka.
+That reduced the same live material from an incorrect 12–16 segments to approximately 3–10 segments and restored useful stereo movement.
 
-JavaScript v3.2 prihvaćao je rast razine trenutačno, kao postojeći Chrome VU, dok se decay primjenjivao samo pri padu. Ponovljeni test u Safariju 26.6.2 potvrdio je: 0/0 bez SSE veze prije `playing`, aktivan `server-real` feed bez SSE greške nakon `playing`, odvojene L/R razine te povratak na 0/0 i zatvaranje veze nakon Stop.
+### Startup gate and rendering optimization
 
-## Live-match v3.3
+Safari was changed to wait for the real `playing` event. During simulated slow startup, the meter remained at 0/0 with no SSE connection; the feed opened only after actual playback began.
 
-Produkcijski servis 24. 9. 2026. prebačen je na 60 mjerenja/s. Svaki paket koristi RMS zadnjih 256 stereo uzoraka, jednako `fftSize=256` lokalnog Chrome/Firefox/Brave analysera. Izmjerena izlazna brzina bila je 59,99 poruka/s uz približno 2,6 % CPU-a za Python i 1,2 % za FFmpeg u staging testu.
+The LED renderer was also changed to update DOM classes only when the rounded number of illuminated segments changed.
 
-Safari Stop sada radi `unload()` na postojećem SoundManager objektu. Time se zatvara zastarjeli AAC buffer koji je nakon ponovljenih Stop/Play ciklusa uzrokovao preskakanje, digitalne artefakte ili nestanak zvuka. Ne stvara se drugi `Audio` objekt.
+### v3.2 low-latency server tuning
 
-Izolirani Safari test prošao je 5/5 ciklusa: pet otvaranja SSE veze, 50 obrađenih level paketa, pet `unload()` zatvaranja, bez greške i s LED povratkom na 0/0 nakon svakog Stop.
+On 24 September 2026 the production feed moved from 10 to 25 measurements/s and the alignment buffer moved from 5.0 to 1.5 seconds. The public endpoint measured 25.0 events/s and remained stable.
 
-## Odbačeni display-sync pokus v3.4
+v3.2 applied level increases immediately and decay only while falling, matching the behavior of the original Chrome meter more closely.
 
-Iskušano je crtanje najnovije stvarne SSE razine jednom po `requestAnimationFrame` frameu. Izolirani regresijski test prošao je 5/5 Stop/Play ciklusa, ali je korisnička provjera na stvarnoj produkcijskoj stranici pokazala lošije, tromije kretanje nego u v3.3.
+### v3.3 live-match window and Stop/Play fix
 
-Zato je v3.4 odbačen i klijentski kod vraćen na izravno crtanje svakog SSE događaja iz v3.3. Serverskih 60 mjerenja/s, 256-frame analiza, gain, stereo razdvajanje i Safari `unload()` popravak ostali su nepromijenjeni. Buffer je u tom trenutku ostao 1,5 s, a naknadno je zasebno vremenski kalibriran.
+The feed then moved to 60 measurements/s. Each event analysed the latest 256 stereo frames, matching the local analyser's `fftSize = 256`. A staging measurement produced 59.99 events/s at approximately 2.6% Python CPU and 1.2% FFmpeg CPU.
 
-## Produkcijska vremenska kalibracija 26. 9. 2026.
+Repeated Safari Stop/Play exposed a separate player-lifecycle problem: the theme paused the infinite AAC stream but retained stale compressed data. Reusing that paused object could cause skipping, digital clicks or silence.
 
-Javni SSE transport ponovno je provjeren na 60 poruka/s bez rupa, rastućeg reda ili mrežnog zaostatka. Produkcijska usporedba pokazala je da 1,50 s fiksnog buffera u Safariju malo kasni za čujnim signalom. Vrijednost 1,25 s bila je bolja, a 1,10 s prihvaćena je kao dobro vizualno poravnanje.
+The Safari Stop path was therefore changed to call `unload()` on the existing SoundManager sound. The next Play opens a fresh connection on the same player object. It does not create a second `Audio` object.
 
-Tadašnja konfiguracija zato je koristila 66 mjerenja pri 60 mjerenja/s, odnosno 1,10 s. To je empirijska vrijednost: Safari i dalje može dinamički promijeniti vlastiti audio-buffer, pa rješenje nije sample-accurate. Pokušaj automatskog poravnanja sa zasebno pokrenutim Brave playerom nije korišten za promjenu konfiguracije jer svaki preglednik reproducira vlastitu poziciju live streama i izmjerena korelacija nije bila dovoljno pouzdana.
+### Rejected v3.4 display-sync experiment
 
-## Time-normalized decay i 120 Hz završno usklađivanje — v3.5
+v3.4 stored the newest real SSE level and rendered it once per Safari `requestAnimationFrame`. The lifecycle harness still passed, but movement on the production page looked slower than direct SSE rendering. The experiment was rejected and direct rendering of each incoming level event was restored.
 
-Na ProMotion zaslonu Chrome/Brave lokalni analyser crta približno 120 puta/s, dok je Safari serverski put dotad primao 60 mjerenja/s. Zato je decay u v3.5 promijenjen iz fiksnih `0.3` segmenata po frameu u vremenski normaliziranih 36 segmenata/s, bez promjene trenutačnog attacka, gaina ili RMS skale.
+### Alignment calibration
 
-Serverska stopa zatim je podignuta sa 60 na 120 mjerenja/s, uz isti prozor od 256 stereo frameova i isti buffer od 1,10 s. Red zato sadrži 132 mjerenja. Produkcijski servis ostao je stabilan: Python je neposredno nakon promjene koristio približno 4,2 % CPU-a, FFmpeg 0,8 %, a cijeli servis oko 21 MB memorije. Završna usporedba u Safariju i Chromeu ocijenjena je vizualno jednakom.
+The 1.50-second delay remained slightly late against audible Safari playback. A controlled production comparison tested 1.25 seconds and then 1.10 seconds. The 1.10-second value was accepted as the best observed alignment.
+
+At 60 measurements/s this queue contained 66 measurements. This is an empirical alignment value, not sample-accurate synchronization: Safari may change its own audio buffering without exposing the exact audible sample position to the SSE client.
+
+### v3.5 time-normalized decay and 120 Hz final match
+
+On the tested ProMotion display, Chrome/Brave rendered the local analyser at approximately 120 frames/s while Safari's numeric feed still supplied 60 measurements/s. Chrome therefore captured more short peaks and looked more responsive.
+
+v3.5 replaced the fixed decay of `0.3` segments per rendered frame with an elapsed-time rate of 36 segments/s. Attack remained immediate.
+
+The server was then increased from 60 to 120 measurements/s while retaining the latest-256-frame analysis and 1.10-second alignment. The queue consequently increased to 132 measurements.
+
+Immediately after activation:
+
+- Python used approximately 4.2% CPU and 19 MB RSS;
+- FFmpeg used approximately 0.8% CPU and 48 MB RSS;
+- the systemd service cgroup used approximately 21 MB;
+- `lastError` remained empty;
+- the final side-by-side Safari and Chrome comparison was judged visually equivalent.
+
+## Lifecycle regression test
+
+The isolated Safari harness completed five consecutive Stop/Play cycles with:
+
+- five SSE connections;
+- real, separate L/R values;
+- 50 processed level events in the original 60 Hz harness run;
+- five releases of the old SoundManager stream;
+- no SSE errors;
+- 0/0 LEDs and a closed feed after every Stop.
+
+The harness deliberately mocks the existing player lifecycle and consumes the real public numeric VU feed. It never starts a second browser audio stream.
+
+## Final production baseline
+
+```text
+client:            hybrid real VU v3.5 time-normalized decay
+server rate:       120 measurements/s
+analysis window:   latest 256 stereo frames
+alignment buffer:  1.10 seconds / 132 measurements
+gain:              24
+LEDs:              18 per channel
+Safari rendering:  direct on each SSE level event
+mobile:            disabled at 900 px and below
+```
+
+## Known limitations
+
+- Safari's numeric VU and audible audio use different timing paths.
+- The fixed 1.10-second queue can only approximate Safari's private, variable playback buffer.
+- Safari may render page updates below the display's maximum refresh rate.
+- Network jitter can cause small temporary visual offsets.
+- A browser update may change either the Web Audio limitation or Safari's buffering behavior, so major Safari releases should be retested.
+
+These limitations do not make the meter fake: every displayed value is calculated from the real stereo program. They explain only why exact sample-level alignment cannot be guaranteed.

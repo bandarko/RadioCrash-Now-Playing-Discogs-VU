@@ -1,13 +1,13 @@
 add_action('rest_api_init', function () {
 
-  // TEST ruta (da odmah znamo radi li)
+  // Test route for a quick availability check.
   register_rest_route('rc/v1', '/ping', [
     'methods'  => 'GET',
     'callback' => function () { return [ 'ok' => true, 'ts' => time() ]; },
     'permission_callback' => '__return_true',
   ]);
 
-  // Discogs proxy ruta
+  // Discogs proxy route.
   register_rest_route('rc/v1', '/discogs', [
     'methods'  => 'GET',
     'callback' => 'rc_discogs_proxy',
@@ -24,12 +24,12 @@ function rc_discogs_proxy(\WP_REST_Request $req) {
     return new \WP_REST_Response([ 'ok' => false, 'error' => 'missing_params' ], 400);
   }
 
-  // ✅ OVDJE STAVI TOKEN
+  // Read the token from the server environment; never commit it here.
   $token = getenv('RC_DISCOGS_TOKEN') ?: '';
 
   $type = ($type === 'master') ? 'master' : 'release';
 
-  // Cache 30 min (da Discogs ne vidi spam)
+  // Cache for 30 minutes to avoid unnecessary Discogs requests.
   $cache_key = 'rc_discogs_' . md5(mb_strtolower($artist . '|' . $title . '|' . $type, 'UTF-8'));
   $cached = get_transient($cache_key);
   if ($cached !== false) {

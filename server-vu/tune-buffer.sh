@@ -10,7 +10,7 @@ SUCCESS=0
 if ! awk -v value="${TARGET_RAW}" 'BEGIN {
     exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value >= 0.5 && value <= 2.5)
 }'; then
-    echo "Upotreba: sudo $0 BUFFER_SEKUNDE (dopušteno 0.5–2.5)" >&2
+    echo "Usage: sudo $0 BUFFER_SECONDS (allowed range: 0.5–2.5)" >&2
     exit 1
 fi
 
@@ -28,7 +28,7 @@ cleanup() {
 rollback() {
     local exit_code=$?
     if [[ ${SUCCESS} -eq 0 && -f "${SERVICE_BACKUP}" ]]; then
-        echo "Provjera nije prošla; vraćam prethodni VU buffer..." >&2
+        echo "Validation failed; restoring the previous VU buffer..." >&2
         install -o root -g root -m 0644 "${SERVICE_BACKUP}" "${SERVICE_TARGET}"
         systemctl daemon-reload
         systemctl restart rc-vu.service || true
@@ -41,17 +41,17 @@ trap rollback ERR INT TERM
 trap cleanup EXIT
 
 if [[ ${EUID} -ne 0 ]]; then
-    echo "Pokreni ovu skriptu sa sudo." >&2
+    echo "Run this script with sudo." >&2
     exit 1
 fi
 
 [[ -f "${SERVICE_TARGET}" ]] || {
-    echo "Nedostaje ${SERVICE_TARGET}." >&2
+    echo "Missing ${SERVICE_TARGET}." >&2
     exit 1
 }
 
 if [[ $(grep -c '^Environment=RC_VU_BUFFER_SECONDS=' "${SERVICE_TARGET}") -ne 1 ]]; then
-    echo "Očekivana je točno jedna RC_VU_BUFFER_SECONDS postavka." >&2
+    echo "Expected exactly one RC_VU_BUFFER_SECONDS setting." >&2
     exit 1
 fi
 
@@ -87,5 +87,5 @@ fi
 SUCCESS=1
 cat "${HEALTH_FILE}"
 echo
-echo "Safari VU buffer je ${TARGET_SERVICE} s."
-echo "Backup prethodnog servisa: ${SERVICE_BACKUP}"
+echo "Safari VU buffer is ${TARGET_SERVICE} s."
+echo "Previous service backup: ${SERVICE_BACKUP}"

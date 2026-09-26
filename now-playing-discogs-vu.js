@@ -1,23 +1,23 @@
 /**
  * RADIO CRASH — NOW PLAYING + DISCOGS + VU
  * WordPress: Custom CSS & JS → "JS 1 za Svira sada + Discogs + VU"
- * Copy/paste cijele datoteke u postojeći JavaScript zapis.
+ * Copy/paste the complete file into the existing JavaScript record.
  *
- * Verzija: 2026-09-26 — hybrid real VU v3.5 time-normalized decay
- * - Now Playing i Discogs koriste postojeći WP proxy.
- * - VU ima 18 LED segmenata po kanalu.
- * - Chrome/Firefox/Brave analiziraju samo postojeći SoundManager2 player.
- * - Safari prima samo brojčane L/R razine sa servera preko SSE-a.
- * - Ne stvara drugi Audio(), ne postavlja drugi stream URL i ne poziva play()/pause().
- * - Na ekranima do 900 px VU se uopće ne inicijalizira.
- * - Nema fake/random fallbacka: bez stvarnog signala LED-ice ostaju na nuli.
+ * Version: 2026-09-26 — hybrid real VU v3.5 time-normalized decay
+ * - Now Playing and Discogs use the existing WordPress proxy.
+ * - The VU has 18 LED segments per channel.
+ * - Chrome/Firefox/Brave analyse only the existing SoundManager2 player.
+ * - Safari receives numeric L/R levels from the server over SSE.
+ * - No second Audio(), stream URL or play()/pause() call is created.
+ * - The VU is not initialized at viewport widths of 900 px and below.
+ * - There is no fake/random fallback: LEDs remain at zero without a real signal.
  */
 
 (function () {
   // ===== RC Now Playing (proxy-only) =====
-  // Verzija: 2026-02-15 rc-np-proxy-v1
-  // ✅ Discogs se zove ISKLJUČIVO preko WP proxyja (/wp-json/rc/v1/discogs)
-  // ❌ NIKAD ne zove api.discogs.com iz browsera
+  // Version: 2026-02-15 rc-np-proxy-v1
+  // Discogs is called only through the WordPress proxy (/wp-json/rc/v1/discogs).
+  // The browser must never call api.discogs.com directly.
 
   const STATS_URL = "https://live.radiocrash.net/stats?json=1&sid=1";
   const TEXT_URL  = "https://live.radiocrash.net/currentsong?sid=1";
@@ -25,7 +25,7 @@
 
   const DISCOGS_PROXY_URL = "/wp-json/rc/v1/discogs"; // ?artist=..&title=..&type=release
 
-  // Debug (ostavi true dok ne proradi, poslije možeš na false)
+  // Debug switch; keep false in production.
   const DEBUG = false;
 
   // ===== STATE =====
@@ -34,7 +34,7 @@
   let lastLink = "";
   let lastCover = "";
 
-  // ubij staru instancu ako postoji
+  // Remove an old instance if one exists.
   if (window.RCNP_TIMER) { try { clearInterval(window.RCNP_TIMER); } catch (_) {} }
   if (window.RCNP_TIMER2) { try { clearTimeout(window.RCNP_TIMER2); } catch (_) {} }
 
@@ -173,14 +173,14 @@
     const T = norm(title);
     const tokens = T.split(/\s+/).filter(w => w && !/^(the|and|of|to|a|an|in|on|for|mix|version|edit)$/i.test(w));
 
-    // 1) artist + svi tokeni
+    // 1) Artist plus all title tokens.
     let hit = raw.results.find(it => {
       const tt = norm(it.title);
       return tt.includes(A) && tokens.every(tok => tt.includes(tok));
     });
     if (hit) return hit;
 
-    // 2) artist + bar pola tokena
+    // 2) Artist plus at least half of the title tokens.
     hit = raw.results.find(it => {
       const tt = norm(it.title);
       const matchCount = tokens.filter(tok => tt.includes(tok)).length;
@@ -188,7 +188,7 @@
     });
     if (hit) return hit;
 
-    // 3) fallback: najveći community.have (najčešći release)
+    // 3) Fallback: highest community.have count (most common release).
     let best = null, bestHave = -1;
     for (const it of raw.results) {
       const have = (it.community && typeof it.community.have === "number") ? it.community.have : 0;
@@ -415,10 +415,10 @@
 })();
 
 
-/* === RC VU METER STEREO - HYBRID REAL VU v3.3 SAFARI LIVE-MATCH - 24.9.2026. ===
- * Chrome/Firefox/Brave: Web Audio analizira postojeći player.
- * Safari: server šalje samo stvarne brojčane L/R razine preko SSE-a.
- * Ni jedna grana ne stvara dodatni Audio niti pokreće drugi audio stream.
+/* === RC VU METER STEREO - HYBRID REAL VU v3.5 - 26.9.2026. ===
+ * Chrome/Firefox/Brave: Web Audio analyses the existing player.
+ * Safari: the server sends only real numeric L/R levels over SSE.
+ * Neither path creates another Audio object or starts a second audio stream.
  */
 (function () {
   const RUNTIME_KEY = "RC_VU_HYBRID_RUNTIME";
@@ -434,14 +434,14 @@
     /Apple Computer/i.test(vendor) &&
     !/(Chrome|Chromium|CriOS|Edg|OPR|Firefox|FxiOS)/i.test(userAgent);
 
-  // Ukloni staru instancu ako se Custom JS ponovno izvrši.
+  // Remove an old instance if the Custom JS record executes again.
   [RUNTIME_KEY, LEGACY_RUNTIME_KEY].forEach(function (key) {
     if (window[key] && typeof window[key].destroy === "function") {
       try { window[key].destroy(); } catch (_) {}
     }
   });
 
-  // Na mobitelima se VU logika i server veza uopće ne pokreću.
+  // Do not initialize VU logic or the server connection on narrow/mobile views.
   if (window.matchMedia("(max-width: 900px)").matches) {
     const oldVu = document.getElementById("rc-vu-mini");
     if (oldVu) oldVu.remove();
@@ -477,8 +477,8 @@
   const ledCache = { l: null, r: null };
   const renderedCount = { l: -1, r: -1 };
 
-  // Originalnih 0.3 po frameu na 120 Hz iznosi 36 LED segmenata/s.
-  // Vrijeme, a ne broj browser/SSE frameova, sada određuje brzinu pada.
+  // The original 0.3 per frame at 120 Hz equals 36 LED segments/s.
+  // Elapsed time, not browser/SSE frame count, determines decay speed.
   const DECAY_PER_SECOND = 36;
   const MAX_DECAY_STEP_SECONDS = 0.1;
   const LOCAL_GAIN = 24;
@@ -597,8 +597,8 @@
     const sound = getMainSound();
     const audio = sound && sound._a;
 
-    // Safari server feed smije krenuti tek na stvarnom HTMLMediaElement
-    // "playing" događaju, ne već kada SoundManager primi naredbu Play.
+    // The Safari server feed may start only on the real HTMLMediaElement
+    // "playing" event, not when SoundManager merely receives a Play command.
     if (IS_SAFARI) {
       return !!audio && safariPlaybackReady && !audio.paused && !audio.ended;
     }
@@ -612,7 +612,7 @@
       const audio = sound && sound._a;
       if (!audio) return;
 
-      // Potrebno je samo za lokalni Web Audio analyser, prije dodjele stream URL-a.
+      // Needed only for the local Web Audio analyser, before assigning the stream URL.
       if (!audio.currentSrc && !audio.getAttribute("src")) {
         audio.crossOrigin = "anonymous";
         if (typeof audio.setAttribute === "function") {
@@ -668,7 +668,7 @@
       audioCtx = new AudioContextClass();
       return audioCtx;
     } catch (error) {
-      warn("AudioContext nije dostupan.", error);
+      warn("AudioContext is unavailable.", error);
       return null;
     }
   }
@@ -710,7 +710,7 @@
     if (!ctx) return false;
 
     try {
-      // Isključivo audio element postojećeg playera; nema new Audio/src/play.
+      // Use only the existing player's audio element; no new Audio/src/play.
       const source = ctx.createMediaElementSource(audio);
       source.connect(ctx.destination);
 
@@ -749,7 +749,7 @@
     } catch (error) {
       graphFailedFor = audio;
       setMode("local-error");
-      warn("Lokalni analyser se nije mogao spojiti; drugi stream nije pokrenut.", error);
+      warn("The local analyser could not attach; no second stream was started.", error);
       return false;
     }
   }
@@ -762,16 +762,16 @@
     const db = Number(value);
     if (!Number.isFinite(db) || db <= -96) return 0;
 
-    // Ista matematika kao u Chrome/Firefox/Brave grani:
-    // dBFS -> linearni RMS -> postojeći gain od 24.
+    // Same calculation as the Chrome/Firefox/Brave path:
+    // dBFS -> linear RMS -> the existing gain of 24.
     const linearRms = Math.pow(10, db / 20);
     return Math.max(0, Math.min(18, linearRms * LOCAL_GAIN));
   }
 
   function renderSafariServerLevel() {
-    // Safari zna usporiti ili potpuno pauzirati requestAnimationFrame čak i dok
-    // EventSource uredno prima podatke. Crtanje na samom SSE događaju daje isti
-    // ritam kao Chrome analyser: jedan novi stereo uzorak otprilike svakih 8 ms.
+    // Safari can throttle or pause requestAnimationFrame while EventSource still
+    // receives data normally. Rendering on each SSE event keeps the Chrome-like
+    // cadence: one new stereo measurement approximately every 8 ms.
     const now = performance.now();
     const elapsedSeconds = lastServerRenderAt
       ? Math.min(MAX_DECAY_STEP_SECONDS, Math.max(0, (now - lastServerRenderAt) / 1000))
@@ -906,8 +906,8 @@
   }
 
   function approachLevel(current, target, elapsedSeconds) {
-    // Napad je trenutačan. Pad je vremenski normaliziran pa 120 Hz Safari SSE
-    // i 120 Hz Brave/Chrome requestAnimationFrame imaju isti odziv.
+    // Attack is immediate. Decay is time-normalized so 120 Hz Safari SSE and
+    // 120 Hz Brave/Chrome requestAnimationFrame have the same response.
     if (target >= current) return target;
     const seconds = Math.min(
       MAX_DECAY_STEP_SECONDS,
@@ -1001,11 +1001,11 @@
     const sound = getMainSound();
     if (!sound) return;
 
-    // Vice tema na Stop radi samo pause(). Kod beskonačnog AAC streama Safari
-    // zatim nastavlja zastarjeli komprimirani buffer, što nakon više ciklusa
-    // može uzrokovati preskakanje, digitalne artefakte i nestanak zvuka.
-    // Unload zatvara isključivo vezu postojećeg playera; sljedeći Play na istom
-    // SoundManager objektu otvara svjež stream. Ne stvara se dodatni Audio().
+    // The Vice theme only calls pause() on Stop. With an infinite AAC stream,
+    // Safari can later resume stale compressed data, causing skips, digital
+    // artifacts or silence after repeated cycles. unload() closes only the
+    // existing player's connection; the next Play opens a fresh stream on the
+    // same SoundManager object. No additional Audio object is created.
     try {
       if (typeof sound.unload === "function") {
         sound.unload();
@@ -1017,9 +1017,9 @@
       safariStreamReleases += 1;
       safariPlaybackReady = false;
       stopVu();
-      log("Safari live stream otpušten nakon Stop.");
+      log("Safari live stream released after Stop.");
     } catch (error) {
-      warn("Safari live stream nije se mogao otpustiti nakon Stop.", error);
+      warn("Safari live stream could not be released after Stop.", error);
     }
   }
 
@@ -1050,9 +1050,9 @@
       attachToExistingPlayer();
     } else if (clickedMainPlayButton) {
       const releaseToken = ++safariReleaseToken;
-      // Capture listener se izvrši prije click handlera teme. Microtask se izvrši
-      // odmah nakon cijelog click dispatcha, kada je tema već promijenila stanje,
-      // ali ga Safari ne usporava kao setTimeout u pozadinskoj kartici.
+      // The capture listener runs before the theme's click handler. The microtask
+      // runs after the complete click dispatch, once the theme has changed state,
+      // without Safari throttling it like a background-tab setTimeout.
       const afterClick = window.queueMicrotask || function (callback) {
         Promise.resolve().then(callback);
       };
@@ -1061,7 +1061,7 @@
       });
     }
 
-    // Tema tek nakon klika stvara ili mijenja SoundManager audio element.
+    // The theme creates or replaces the SoundManager audio element after the click.
     setTimeout(syncVuWithMainPlayer, 80);
     setTimeout(syncVuWithMainPlayer, 350);
   }

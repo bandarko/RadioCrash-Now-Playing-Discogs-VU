@@ -4,6 +4,8 @@ This service opens one local connection to the existing Shoutcast stream, decode
 
 It does not record audio, write audio to disk or proxy audio to website visitors.
 
+The service is shared by all Safari listeners. Additional Safari clients add lightweight SSE connections; they do not start additional FFmpeg decoders or audio-source connections.
+
 ## Current production configuration
 
 ```text
@@ -40,6 +42,8 @@ Public Nginx endpoints:
 - `rollback.sh` — rollback of the Nginx integration created by `deploy.sh`.
 
 The Nginx snippet uses the existing `$cors_allow` variable from the Radio Crash stream virtual host. Verify that mapping before using the snippet on another server.
+
+The checked-in systemd unit is production-specific: it uses the `banadmin` account and `/opt/radiocrash-vu`. Change the unit, staging paths and ownership deliberately if deploying on another host.
 
 ## Prerequisite
 
@@ -86,6 +90,16 @@ The health JSON must include:
 
 Other live level and process fields will vary.
 
+Useful host-side diagnostics:
+
+```bash
+journalctl -u rc-vu.service -n 50 --no-pager
+ps -C python3,ffmpeg -o pid,pcpu,pmem,rss,etime,cmd --sort=-pcpu
+ss -ltnp 'sport = :8767'
+```
+
+An empty `lastError`, a low `ageMs` and a continuously increasing `seq` indicate a healthy analyser loop.
+
 ## Alignment tuning
 
 The production value was calibrated on 26 September 2026: 1.50 seconds was slightly late, 1.25 seconds improved the match, and 1.10 seconds was accepted in the live Safari comparison.
@@ -115,3 +129,13 @@ sudo /home/banadmin/rc-vu-staging/rollback.sh
 ```
 
 This restores the Nginx file saved by the most recent `deploy.sh`, validates and reloads Nginx, and disables the VU service. The upgrade script has its own automatic service rollback.
+
+## Failure isolation
+
+- `online: false`: inspect `lastError`, the service journal and local access to port 8000.
+- Public `/vu/status` fails but local `/health` works: inspect the Nginx include and CORS mapping.
+- Levels work but Safari audio is silent: investigate the browser player separately; the numeric feed and browser audio are different connections.
+- Safari timing changes after a browser update: verify the current 1.10-second delay before adjusting it, and change only one parameter at a time.
+- Repeated Stop/Play breaks audio: verify that the deployed v3.5 client still unloads the existing Safari SoundManager stream on Stop.
+
+Do not delete package-manager lock files, restart the entire host or restart unrelated streaming services as a first response to a VU-only failure.

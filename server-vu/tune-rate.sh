@@ -8,7 +8,7 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 SUCCESS=0
 
 if [[ ! "${TARGET_RAW}" =~ ^(30|60|90|120)$ ]]; then
-    echo "Upotreba: sudo $0 30|60|90|120" >&2
+    echo "Usage: sudo $0 30|60|90|120" >&2
     exit 1
 fi
 
@@ -23,7 +23,7 @@ cleanup() {
 rollback() {
     local exit_code=$?
     if [[ ${SUCCESS} -eq 0 && -f "${SERVICE_BACKUP}" ]]; then
-        echo "Provjera nije prošla; vraćam prethodnu brzinu VU-a..." >&2
+        echo "Validation failed; restoring the previous VU update rate..." >&2
         install -o root -g root -m 0644 "${SERVICE_BACKUP}" "${SERVICE_TARGET}"
         systemctl daemon-reload
         systemctl restart rc-vu.service || true
@@ -36,17 +36,17 @@ trap rollback ERR INT TERM
 trap cleanup EXIT
 
 if [[ ${EUID} -ne 0 ]]; then
-    echo "Pokreni ovu skriptu sa sudo." >&2
+    echo "Run this script with sudo." >&2
     exit 1
 fi
 
 [[ -f "${SERVICE_TARGET}" ]] || {
-    echo "Nedostaje ${SERVICE_TARGET}." >&2
+    echo "Missing ${SERVICE_TARGET}." >&2
     exit 1
 }
 
 if [[ $(grep -c '^Environment=RC_VU_UPDATES_PER_SECOND=' "${SERVICE_TARGET}") -ne 1 ]]; then
-    echo "Očekivana je točno jedna RC_VU_UPDATES_PER_SECOND postavka." >&2
+    echo "Expected exactly one RC_VU_UPDATES_PER_SECOND setting." >&2
     exit 1
 fi
 
@@ -85,6 +85,6 @@ fi
 SUCCESS=1
 cat "${HEALTH_FILE}"
 echo
-echo "Safari VU sada prima ${TARGET_RAW} stvarnih mjerenja/s; buffer je ostao 1.10 s."
-echo "Povratak na 60 Hz: sudo $0 60"
-echo "Backup prethodnog servisa: ${SERVICE_BACKUP}"
+echo "Safari VU now receives ${TARGET_RAW} real measurements/s; the buffer remains 1.10 s."
+echo "Return to 60 Hz: sudo $0 60"
+echo "Previous service backup: ${SERVICE_BACKUP}"

@@ -1,53 +1,166 @@
-# Radio Crash hybrid VU v3.5 — time-normalized live-match
+# Radio Crash hybrid VU v3.5 operations guide
 
-## Gdje se nalazi kod
+This runbook describes the production layout, routine checks, safe tuning and rollback procedures for the Radio Crash stereo VU meter.
 
-JavaScript u WordPress administraciji:
+## Production baseline
 
-**Custom CSS & JS → All Custom Code → `JS 1 za Svira sada + Discogs + VU`**
+| Setting | Production value |
+| --- | --- |
+| Client version | `hybrid real VU v3.5 time-normalized decay` |
+| LED segments | 18 per channel |
+| Server update rate | 120 measurements/s |
+| Analysis window | latest 256 stereo frames |
+| Alignment buffer | 1.10 seconds / 132 measurements |
+| Browser cutoff | disabled at 900 px and below |
 
-CSS u WordPress administraciji:
+Do not change more than one of the update rate, analysis window, alignment buffer or client response curve at a time. The current combination was accepted in a side-by-side Safari and Chrome production test on 26 September 2026.
 
-**Custom CSS & JS → All Custom Code → `CSS 1 za Svira sada + Discogs + logo lijevo + VU`**
+## Code locations
 
-VU nije zaseban WordPress plugin. Nalazi se na dnu istog JavaScript zapisa kao “Sada slušate”.
+### WordPress
 
-Detaljno objašnjenje zašto Safari treba serverski numeric-only feed, kako je isključen CORS problem i zašto sinkronizacija ne može biti potpuno jednaka lokalnom Chrome analyseru nalazi se u [`WHY-SAFARI-NEEDS-SERVER-VU.md`](WHY-SAFARI-NEEDS-SERVER-VU.md).
+The record titles below are intentionally kept in Croatian because they are the exact identifiers used in the live WordPress administration.
 
-## Kako radi
+| Purpose | WordPress path | Record title |
+| --- | --- | --- |
+| JavaScript | Custom CSS & JS → All Custom Code | `JS 1 za Svira sada + Discogs + VU` |
+| CSS | Custom CSS & JS → All Custom Code | `CSS 1 za Svira sada + Discogs + logo lijevo + VU` |
 
-- Chrome, Firefox i Brave: Web Audio analizira audio element postojećeg SoundManager2 playera.
-- Safari: `EventSource` prima stvarne brojčane L/R razine s `https://live.radiocrash.net/vu/events`.
-- Safari ne koristi Web Audio analyser jer WebKit za kontinuirani Shoutcast/Icecast stream vraća nule.
-- Nema drugog `Audio` objekta, drugog audio streama ni fake/random animacije.
-- SSE veza postoji samo dok glavni player svira.
-- Safari čeka stvarni `playing` događaj, pa VU ne kreće prije zvuka.
-- Safari koristi istu RMS skalu i gain `24` kao ostali desktop preglednici.
-- Serverski feed šalje 120 mjerenja u sekundi, analizira zadnjih 256 stereo uzoraka i koristi 1,10 s vremenskog pomaka (132 mjerenja).
-- Safari crta svaku pristiglu stvarnu SSE razinu izravno. Naknadno iskušano vezivanje uz `requestAnimationFrame` nije zadržano jer je na produkcijskoj stranici izgledalo tromije.
-- Stop radi `unload()` postojećeg SoundManager objekta, pa svaki novi Play dobiva svjež AAC live stream bez preskakanja i digitalnih artefakata.
-- Rast razine je trenutačan kao u Chromeu; samo pad LED-ica ima kratki decay normaliziran proteklim vremenom, ne brojem browser frameova.
-- LED klase mijenjaju se samo kad se promijeni broj aktivnih segmenata, radi manjeg opterećenja Safarija.
-- VU ima 18 segmenata po kanalu i potpuno je isključen do širine 900 px.
+The VU is not a separate WordPress plugin. It is the final section of the same JavaScript record that implements the Now Playing and Discogs features.
 
-## Copy/paste
+### Streaming server
 
-Zamijeni cijeli sadržaj JavaScript zapisa sadržajem datoteke:
+```text
+/opt/radiocrash-vu/rc_vu_server.py
+/etc/systemd/system/rc-vu.service
+/home/banadmin/rc-vu-staging/
+```
 
-`now-playing-discogs-vu.js`
+The service listens only on `127.0.0.1:8767`. Nginx exposes the read-only status and SSE routes.
 
-CSS za ovo rješenje funkcionalno nije mijenjan. Dokumentirana puna kopija je:
+## Browser behavior
 
-`now-playing-discogs-vu.css`
+- Chrome, Firefox and Brave attach Web Audio analysers to the existing SoundManager2 audio element.
+- Safari receives real numeric L/R levels from `https://live.radiocrash.net/vu/events` through `EventSource`.
+- Safari waits for the existing player to emit `playing`; the meter cannot start before audible playback.
+- Stop closes the SSE connection, resets the LEDs and unloads the stale Safari AAC connection from the existing SoundManager object.
+- No path creates a second `Audio` object, starts another browser audio stream or uses random/fake level animation.
+- Level attack is immediate. Decay is normalized by elapsed time, so it does not depend on a browser's rendering frame rate.
+- LED classes are changed only when the rounded number of illuminated segments changes.
 
-Nakon spremanja napravi hard refresh.
+See [Why Safari needs a server-side VU feed](WHY-SAFARI-NEEDS-SERVER-VU.md) for the technical rationale.
 
-## Provjera
+## Routine health check
 
-1. Safari Play: VU prati stvarni signal.
-2. Safari Stop: LED se gase i SSE veza se zatvara.
-3. Safari Stop/Play: veza se ponovno otvara bez drugog audio streama.
-4. Chrome, Firefox i Brave: postojeći lokalni VU i dalje radi.
-5. Mobitel ili viewport do 900 px: nema VU elementa ni SSE veze.
+From any machine:
 
-Server-side servis i javni endpoint instalirani su 24. 9. 2026. Produkcijska konfiguracija 26. 9. 2026. potvrđena je na 120 poruka/s, 256-frame analizi i 1,10 s bufferu. Buffer je dobiven postupnim A/B podešavanjem s 1,50 preko 1,25 na 1,10 s; stopa je zatim podignuta sa 60 na 120 mjerenja/s kako bi kratki vrhovi i odziv odgovarali Chromeu/Braveu na 120 Hz zaslonu. U završnoj usporedbi Safari i Chrome izgledali su jednako. Izolirani Safari 26.6.2 test prošao je 5/5 uzastopnih Stop/Play ciklusa bez greške, duplog audio streama ili zaostalog AAC buffera.
+```bash
+curl -fsS https://live.radiocrash.net/vu/status
+```
+
+Expected invariant fields:
+
+```json
+{
+  "online": true,
+  "updatesPerSecond": 120,
+  "bufferSeconds": 1.1,
+  "analysisFrames": 256,
+  "queueDepth": 132,
+  "lastError": ""
+}
+```
+
+Fields such as `seq`, levels, `ageMs`, `clients`, `ffmpegPid` and `serverTime` change continuously. An `ageMs` value in the low tens of milliseconds is normal.
+
+On the streaming host:
+
+```bash
+systemctl --no-pager --full status rc-vu.service
+journalctl -u rc-vu.service -n 50 --no-pager
+curl -fsS http://127.0.0.1:8767/health
+```
+
+The VU service is independent of the public audio player. A VU failure should be investigated without restarting Nginx, Icecast/Shoutcast or the host unless there is separate evidence that those services are unhealthy.
+
+## Safe update procedure
+
+1. Copy the reviewed server files into `/home/banadmin/rc-vu-staging`.
+2. Validate the scripts with `bash -n` and the Python service with `python3 -m py_compile`.
+3. Run the guarded upgrade:
+
+```bash
+sudo /home/banadmin/rc-vu-staging/upgrade-v3-3.sh
+```
+
+The filename is retained for compatibility with the installed staging workflow. The script validates the current production baseline of 120/1.10/256, creates backups, restarts only `rc-vu.service`, verifies health and restores the previous files automatically if validation fails.
+
+## Controlled tuning
+
+### Alignment buffer
+
+```bash
+sudo /home/banadmin/rc-vu-staging/tune-buffer.sh 1.10
+```
+
+Accepted range: 0.5–2.5 seconds. Lower values move the Safari meter earlier; higher values move it later. This changes visual alignment, not the audio player's startup buffer.
+
+### Measurement rate
+
+```bash
+sudo /home/banadmin/rc-vu-staging/tune-rate.sh 120
+```
+
+Accepted values: 30, 60, 90 and 120 measurements/s. The script preserves the 1.10-second delay and 256-frame analysis window. To return to the former rate:
+
+```bash
+sudo /home/banadmin/rc-vu-staging/tune-rate.sh 60
+```
+
+Both tuning scripts back up the active systemd unit, restart only the VU service, validate the requested configuration and automatically roll back on failure.
+
+## Browser acceptance checklist
+
+Test on the production page after every client or lifecycle change:
+
+1. Safari Play: audio starts normally and the VU begins only after audible playback.
+2. Safari Stop: LEDs return to 0/0 and the SSE connection closes.
+3. Safari Stop/Play repeated at least five times: no skipping, digital artifacts, silence or duplicate sound.
+4. Safari stereo: L and R can show different values.
+5. Chrome, Firefox and Brave: the local existing-player analyser still works.
+6. Network panel: exactly one browser audio stream; `/vu/events` is a small text/event-stream connection.
+7. Mobile or viewport at 900 px and below: no VU element and no SSE connection.
+
+The isolated Safari harness can be run with:
+
+```bash
+python3 tests/harness_server.py
+```
+
+Then open `http://127.0.0.1:8766/tests/hybrid-vu-harness.html?autorun=1` in Safari. A successful run reports five completed Stop/Play cycles with no SSE or lifecycle failures.
+
+## Troubleshooting
+
+### Status reports `online: false`
+
+Check `lastError`, the service journal and whether FFmpeg can read `http://127.0.0.1:8000/live.mp3`. Do not delete lock files or restart unrelated services as a first response.
+
+### Safari VU starts before sound
+
+Confirm the active WordPress JavaScript is the complete v3.5 file and that the Safari branch opens the feed only after `playing`, not on the initial `play` request.
+
+### Safari movement is delayed but otherwise correct
+
+Check that the server reports `bufferSeconds: 1.1`. Browser audio buffering can vary, so the alignment is empirical rather than sample-accurate. Adjust only in small controlled steps and compare against audible transients.
+
+### Safari looks less responsive than Chrome
+
+Check for `updatesPerSecond: 120` and `analysisFrames: 256`. Do not restore the rejected Safari `requestAnimationFrame` renderer; it looked slower in production testing.
+
+### Repeated Stop/Play causes skipping or silence
+
+Verify that Safari Stop still calls `unload()` on the existing SoundManager sound. Do not work around this by creating another player or another audio stream.
+
+### VU works but audio does not
+
+Treat this as a player or stream issue. The numeric VU feed can remain healthy while the browser audio path is stalled because they are separate connections.

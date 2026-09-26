@@ -220,9 +220,9 @@ def analyser_loop() -> None:
                 if len(data) != bytes_per_update:
                     break
 
-                # Chromeov AnalyserNode čita zadnjih 256 stereo frameova.
-                # Isti kratki prozor daje Safariju usporedivu, življu dinamiku,
-                # bez mijenjanja stvarne audio veze u pregledniku.
+                # Chrome's AnalyserNode reads the latest 256 stereo frames.
+                # The same short window gives Safari comparable, responsive
+                # movement without changing the browser's actual audio path.
                 DELAY_QUEUE.append(pcm_levels(data[-analysis_bytes:]))
                 if len(DELAY_QUEUE) > delay_frames:
                     STATE.publish(DELAY_QUEUE.popleft())

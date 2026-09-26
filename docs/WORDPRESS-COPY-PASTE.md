@@ -1,64 +1,117 @@
-# Radio Crash — kompletni copy/paste JS i CSS
+# WordPress deployment: complete JavaScript and CSS copies
 
-Pripremljene su dvije kompletne datoteke. Nemoj kombinirati kod iz poruke ili dodavati dijelove ručno.
+Use the repository files as complete deployment units. Do not combine fragments from chat messages, old backups or previous versions.
+
+## Before editing production
+
+1. Confirm the public VU endpoint is healthy: `https://live.radiocrash.net/vu/status`.
+2. Export or copy the current WordPress record contents as a rollback backup.
+3. Keep the JavaScript and CSS records separate.
+4. Do not paste `<script>` or `<style>` wrapper tags; the Custom CSS & JS plugin adds them.
+
+The WordPress record titles are intentionally shown in Croatian because these are their exact production names.
 
 ## JavaScript
 
-WordPress lokacija:
+WordPress location:
 
 **Custom CSS & JS → All Custom Code → `JS 1 za Svira sada + Discogs + VU`**
 
-1. Otvori postojeći zapis.
-2. Napravi sigurnosnu kopiju njegova trenutačnog sadržaja.
-3. Označi cijeli sadržaj zapisa.
-4. Zamijeni ga cijelim sadržajem datoteke `now-playing-discogs-vu.js`.
-5. Spremi zapis.
+Deployment procedure:
 
-JavaScript sadrži postojeći Now Playing/Discogs dio i **hybrid real VU v3.5 time-normalized decay**:
+1. Open the existing record.
+2. Select its complete contents.
+3. Replace everything with the complete contents of `now-playing-discogs-vu.js`.
+4. Save or publish the record.
+5. Purge any page/plugin cache that serves stale inline custom code.
+6. Hard-refresh the production page.
 
-- Chrome, Firefox i Brave analiziraju isključivo audio element postojećeg SoundManager2 playera.
-- Safari otvara `EventSource` prema `https://live.radiocrash.net/vu/events` i prima samo stvarne brojčane L/R razine.
-- Ne postoji dodatni `new Audio()`, dodatni audio `src` ni poziv `play()`/`pause()`.
-- EventSource je otvoren samo dok glavni player svira i zatvara se na Stop.
-- Safari čeka stvarni `playing` događaj; VU zato ne kreće tijekom sporog učitavanja streama.
-- Safari dBFS pretvara istom RMS formulom i gainom `24` kao Chrome/Firefox/Brave.
-- Safari feed radi na 120 mjerenja/s, koristi isti kratki prozor od 256 uzoraka kao Chrome i produkcijski kalibriran serverski pomak od 1,10 s.
-- Safari crta svaku pristiglu stvarnu SSE razinu izravno; to se na produkcijskoj stranici pokazalo življim od naknadno iskušanog `requestAnimationFrame` raspoređivanja.
-- Stop stvarno radi `unload()` postojećeg SoundManager streama, pa sljedeći Play ne nastavlja stari AAC buffer.
-- Napad LED-ica je trenutačan kao u Chromeu; decay se primjenjuje samo pri padu i računa prema stvarno proteklom vremenu.
-- LED DOM se mijenja samo kada se stvarno promijeni broj upaljenih segmenata.
-- Na ekranima do 900 px VU se ne inicijalizira.
+The file contains three integrated features:
+
+- Now Playing text and links;
+- Discogs cover/release lookup through the WordPress proxy;
+- hybrid real stereo VU v3.5.
+
+Important VU invariants:
+
+- Chrome, Firefox and Brave analyse only the existing SoundManager2 audio element.
+- Safari receives real numeric L/R levels from `https://live.radiocrash.net/vu/events`.
+- No branch creates a second `Audio` object or starts a second browser audio stream.
+- Safari waits for the real `playing` event before opening the level feed.
+- Safari uses 120 measurements/s, the latest 256 stereo frames and a calibrated 1.10-second server delay.
+- Attack is immediate; decay is normalized by elapsed time.
+- Safari Stop unloads the stale AAC connection from the existing SoundManager sound so the next Play starts cleanly.
+- At 900 px viewport width and below, the VU and its server connection are not initialized.
 
 ## CSS
 
-WordPress lokacija:
+WordPress location:
 
 **Custom CSS & JS → All Custom Code → `CSS 1 za Svira sada + Discogs + logo lijevo + VU`**
 
-1. Otvori postojeći zapis.
-2. Napravi sigurnosnu kopiju njegova trenutačnog sadržaja.
-3. Označi cijeli sadržaj zapisa.
-4. Zamijeni ga cijelim sadržajem datoteke `now-playing-discogs-vu.css`.
-5. Spremi zapis.
+Deployment procedure:
 
-CSS je funkcionalno jednak pronađenoj produkcijskoj verziji; dodano je samo dokumentacijsko zaglavlje. Izgled VU-a zato se ne bi trebao promijeniti.
+1. Open the existing record.
+2. Select its complete contents.
+3. Replace everything with the complete contents of `now-playing-discogs-vu.css`.
+4. Save or publish the record.
+5. Purge any relevant cache and hard-refresh the site.
 
-Za Safari doradu CSS funkcionalno nije promijenjen; datoteka ostaje ovdje kao dokumentirana puna kopija.
+The CSS file is the documented full production copy. It contains the Now Playing badge, desktop cover, header logo positioning and the 18-segment stereo VU styling. The VU is hidden at 900 px and below.
 
-## Nakon spremanja
+## Production acceptance test
 
-Napravi hard refresh prije prvog testa.
+### Safari desktop
 
-Provjeri na desktop Safariju:
+1. Press Play and confirm audio starts normally.
+2. Confirm the VU remains at zero until playback actually begins.
+3. Confirm L and R show real, independently changing levels.
+4. Press Stop and confirm both channels return to zero.
+5. Repeat Stop/Play at least five times.
+6. Confirm there is no skipping, digital clicking, silence or duplicate sound.
+7. In the Network panel, confirm there is one browser audio stream and one small `/vu/events` text/event-stream connection.
 
-1. Play — VU prati stvarnu glazbu.
-2. Stop pa Play — VU se ponovno pokreće.
-3. Mute/Unmute — VU nastavlja pratiti dolazni signal.
-4. Promijeni karticu pa se vrati — zvuk i VU se oporavljaju.
-5. U Network panelu postoji samo jedan aktivan audio stream; `/vu/events` je mali tekstualni SSE feed, nije audio.
+### Chrome, Firefox and Brave desktop
 
-Ponovi Play/Stop provjeru na Chromeu, Firefoxu i Braveu. Na uređajima/viewportu do 900 px VU se ne inicijalizira.
+1. Confirm the existing-player local analyser starts with playback.
+2. Confirm the VU stops and clears correctly.
+3. Confirm no second audio request is created.
 
-Izolirani test u stvarnom Safariju 26.6.2 potvrdio je `server-safari` način i 5/5 uzastopnih Stop/Play ciklusa: pet SSE veza, stvarne odvojene L/R razine, pet zatvaranja starog streama, bez greške te povratak na 0/0 nakon svakog Stop.
+### Mobile and narrow viewport
 
-Server s početnih 60 mjerenja/s i 256-frame analizom uključen je 24. 9. 2026. Kratko iskušana v3.4 frame-sync varijanta odbačena je jer je na stvarnoj Safari stranici izgledala tromije. WordPress JS v3.5 i serverskih 120 mjerenja/s potvrđeni su 26. 9. 2026.; završna usporedba Safarija i Chromea izgledala je jednako.
+At 900 px and below, confirm there is no `#rc-vu-mini` element and no request to `/vu/events`.
+
+## Version confirmation
+
+The rendered page source should contain:
+
+```text
+hybrid real VU v3.5 time-normalized decay
+```
+
+The public status endpoint should include:
+
+```json
+{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132}
+```
+
+Other fields in the live JSON are expected to vary.
+
+## Rollback
+
+If a frontend regression appears:
+
+1. Restore the complete previous WordPress record from the backup made before editing.
+2. Purge caches and hard-refresh.
+3. Verify that the browser again creates only one audio request.
+
+Do not attempt to fix a frontend regression by starting an additional muted player. That reintroduces the duplicate-stream problem this design explicitly avoids.
+
+## Verified production history
+
+- The server-side Safari path was installed on 24 September 2026.
+- The rejected v3.4 `requestAnimationFrame` experiment looked slower on the real site and was removed.
+- v3.5 normalized decay by elapsed time.
+- The server was calibrated to 1.10 seconds and increased from 60 to 120 measurements/s on 26 September 2026.
+- The final side-by-side Safari and Chrome comparison was judged visually equivalent.
+- The isolated Safari lifecycle harness passed five consecutive Stop/Play cycles without a second browser audio stream.

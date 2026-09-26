@@ -10,6 +10,8 @@ The repository contains one integrated system:
 - the Safari/WebKit numeric level service;
 - deployment, rollback and test documentation.
 
+The design has one non-negotiable rule: the browser must use the existing player only. A visualizer must never start a second audio download or a second playback path.
+
 ## Current production state
 
 Verified on 26 September 2026:
@@ -26,6 +28,32 @@ Verified on 26 September 2026:
 | VU layout | 18 LED segments per channel; disabled at 900 px and below |
 
 The short-lived v3.4 `requestAnimationFrame` display-sync experiment was rejected after production testing because its movement looked slower in Safari. Version v3.5 keeps direct SSE rendering, normalizes LED decay by elapsed time and uses a 120 Hz server feed to match the response of Chrome/Brave on a ProMotion display.
+
+## Documentation
+
+| Document | Purpose |
+| --- | --- |
+| [Why Safari needs a server-side VU feed](docs/WHY-SAFARI-NEEDS-SERVER-VU.md) | WebKit limitation, tested alternatives, architecture and timing trade-offs |
+| [Safari investigation and validation report](docs/SAFARI-TEST-REPORT.md) | Reproducible evidence, version history, calibration and final measurements |
+| [VU operations guide](docs/VU-OPERATIONS.md) | Health checks, deployment, tuning, rollback and troubleshooting |
+| [WordPress deployment](docs/WORDPRESS-COPY-PASTE.md) | Exact records, complete-file replacement and browser acceptance checklist |
+| [Server service guide](server-vu/README.md) | First installation, systemd/Nginx layout and recovery scripts |
+| [Production source policy](SOURCE-INTEGRITY.md) | Source-of-truth and secret-handling rules |
+| [Security policy](SECURITY.md) | Private reporting guidance and public-repository safety |
+
+## Quick production check
+
+```bash
+curl -fsS https://live.radiocrash.net/vu/status
+```
+
+The response should contain these invariant values:
+
+```json
+{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132,"lastError":""}
+```
+
+Live levels, sequence numbers, timestamps, client count, process ID and `ageMs` are expected to vary.
 
 ## Architecture
 
@@ -60,6 +88,7 @@ On Safari only, the current client calls `unload()` on the existing SoundManager
 ```text
 .
 ├── README.md
+├── SECURITY.md
 ├── SOURCE-INTEGRITY.md
 ├── discogs-proxy.php
 ├── now-playing-discogs-vu.js
@@ -151,7 +180,7 @@ To repeat the isolated Safari regression test locally:
 python3 tests/harness_server.py
 ```
 
-Then open `http://127.0.0.1:8766/tests/hybrid-vu-harness.html?autorun=1` in Safari. A successful run reports `AUTO PASS — 5/5 Safari STOP/START ciklusa`. The harness uses a mock of the existing SoundManager player lifecycle and the real public numeric VU feed; it never starts a second browser audio stream.
+Then open `http://127.0.0.1:8766/tests/hybrid-vu-harness.html?autorun=1` in Safari. A successful run reports `AUTO PASS — 5/5 Safari STOP/START cycles`. The harness uses a mock of the existing SoundManager player lifecycle and the real public numeric VU feed; it never starts a second browser audio stream.
 
 ## Discogs proxy
 
@@ -167,7 +196,9 @@ The production `Discogs` snippet supplies cover and release data to the web fron
 - Treat `now-playing-discogs-vu.js`, `now-playing-discogs-vu.css` and `server-vu/` as synchronized production sources.
 - Test Safari Stop/Start repeatedly before deploying player lifecycle changes.
 
-See [`SOURCE-INTEGRITY.md`](SOURCE-INTEGRITY.md).
+The repository is public, but production credentials and infrastructure backups are not part of the project. The committed Discogs proxy reads `RC_DISCOGS_TOKEN` from the server environment; the browser never receives that token. The repository and its reachable Git history were checked for embedded passwords, access tokens and private-key material before this documentation update.
+
+See [`SOURCE-INTEGRITY.md`](SOURCE-INTEGRITY.md) and [`SECURITY.md`](SECURITY.md).
 
 ## Radio Crash
 

@@ -18,7 +18,7 @@ cleanup() {
 rollback() {
     local exit_code=$?
     if [[ ${SUCCESS} -eq 0 && -f "${APP_BACKUP}" && -f "${SERVICE_BACKUP}" ]]; then
-        echo "Greška; vraćam prethodnu VU verziju..." >&2
+        echo "Upgrade failed; restoring the previous VU version..." >&2
         install -o root -g root -m 0755 "${APP_BACKUP}" "${APP_DIR}/rc_vu_server.py"
         install -o root -g root -m 0644 "${SERVICE_BACKUP}" "${SERVICE_TARGET}"
         systemctl daemon-reload
@@ -32,12 +32,12 @@ trap rollback ERR INT TERM
 trap cleanup EXIT
 
 if [[ ${EUID} -ne 0 ]]; then
-    echo "Pokreni ovu skriptu sa sudo." >&2
+    echo "Run this script with sudo." >&2
     exit 1
 fi
 
 for source_file in "${SOURCE_DIR}/rc_vu_server.py" "${SOURCE_DIR}/rc-vu.service"; do
-    [[ -f "${source_file}" ]] || { echo "Nedostaje ${source_file}" >&2; exit 1; }
+    [[ -f "${source_file}" ]] || { echo "Missing ${source_file}" >&2; exit 1; }
 done
 
 python3 -m py_compile "${SOURCE_DIR}/rc_vu_server.py"
@@ -76,6 +76,6 @@ fi
 SUCCESS=1
 cat "${HEALTH_FILE}"
 echo
-echo "VU aktivan: 120 mjerenja/s, 256-frame analiza, buffer 1.10 s."
-echo "Backup programa: ${APP_BACKUP}"
-echo "Backup servisa: ${SERVICE_BACKUP}"
+echo "VU active: 120 measurements/s, 256-frame analysis, 1.10 s buffer."
+echo "Program backup: ${APP_BACKUP}"
+echo "Service backup: ${SERVICE_BACKUP}"

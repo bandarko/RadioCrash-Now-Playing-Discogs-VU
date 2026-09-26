@@ -27,7 +27,7 @@ rollback_on_error() {
     local exit_code=$?
     if [[ ${DEPLOY_OK} -eq 0 ]]; then
         echo
-        echo "Greška pri instalaciji; vraćam prethodnu Nginx konfiguraciju..." >&2
+        echo "Installation failed; restoring the previous Nginx configuration..." >&2
         if [[ -f "${NGINX_BACKUP}" ]]; then
             install -o root -g root -m 0644 "${NGINX_BACKUP}" "${NGINX_CONF}"
         fi
@@ -46,13 +46,13 @@ trap rollback_on_error ERR INT TERM
 trap cleanup EXIT
 
 if [[ ${EUID} -ne 0 ]]; then
-    echo "Pokreni ovu skriptu sa sudo." >&2
+    echo "Run this script with sudo." >&2
     exit 1
 fi
 
 for command_name in ffmpeg python3 nginx curl systemctl ss install awk grep; do
     command -v "${command_name}" >/dev/null || {
-        echo "Nedostaje naredba: ${command_name}" >&2
+        echo "Missing command: ${command_name}" >&2
         exit 1
     }
 done
@@ -63,7 +63,7 @@ for source_file in \
     "${NGINX_SOURCE}" \
     "${NGINX_CONF}"; do
     [[ -f "${source_file}" ]] || {
-        echo "Nedostaje datoteka: ${source_file}" >&2
+        echo "Missing file: ${source_file}" >&2
         exit 1
     }
 done
@@ -73,7 +73,7 @@ python3 -m py_compile "${SOURCE_DIR}/rc_vu_server.py"
 location_count="$(grep -Ec '^[[:space:]]*location[[:space:]]+/[[:space:]]*[{]' "${NGINX_CONF}" || true)"
 if ! grep -Fq "include /etc/nginx/snippets/radiocrash-vu.conf;" "${NGINX_CONF}" \
     && [[ "${location_count}" -ne 1 ]]; then
-    echo "Nisam pronašao točno jednu 'location /' točku u ${NGINX_CONF}; ništa nije promijenjeno." >&2
+    echo "Expected exactly one 'location /' insertion point in ${NGINX_CONF}; nothing was changed." >&2
     exit 1
 fi
 
@@ -83,7 +83,7 @@ printf '%s\n' "${NGINX_BACKUP}" > "${BACKUP_DIR}/last-nginx-backup"
 
 systemctl stop rc-vu.service >/dev/null 2>&1 || true
 if ss -ltnH 'sport = :8767' | grep -q .; then
-    echo "Port 8767 koristi drugi proces; instalacija je zaustavljena prije promjene Nginxa." >&2
+    echo "Port 8767 is used by another process; installation stopped before changing Nginx." >&2
     exit 1
 fi
 
@@ -123,7 +123,7 @@ for _attempt in $(seq 1 30); do
 done
 
 if [[ ${service_ready} -ne 1 ]]; then
-    echo "VU servis nije postao spreman. Zadnje stanje:" >&2
+    echo "The VU service did not become ready. Last status:" >&2
     cat "${HEALTH_FILE}" >&2 || true
     journalctl -u rc-vu.service -n 30 --no-pager >&2 || true
     exit 1
@@ -138,4 +138,4 @@ systemctl --no-pager --full status rc-vu.service | sed -n '1,12p'
 
 DEPLOY_OK=1
 echo
-echo "Radio Crash VU je instaliran. Nginx backup: ${NGINX_BACKUP}"
+echo "Radio Crash VU is installed. Nginx backup: ${NGINX_BACKUP}"

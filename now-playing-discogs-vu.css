@@ -1,9 +1,9 @@
 /**
  * RADIO CRASH — NOW PLAYING + DISCOGS + LOGO + VU
  * WordPress: Custom CSS & JS → "CSS 1 za Svira sada + Discogs + logo lijevo + VU"
- * Copy/paste cijele datoteke u postojeći CSS zapis.
+ * Copy/paste the complete file into the existing CSS record.
  *
- * Verzija dokumentacije: 2026-09-24 — hybrid real VU v3
+ * Documentation version: 2026-09-24 — hybrid real VU v3
  * VU izgled ostaje isti: 18 LED segmenata, desktop prikaz i mobile hide do 900 px.
  */
 
@@ -34,7 +34,7 @@
   pointer-events: auto;
 }
 
-/* VEĆI cover samo na desktopu */
+/* Larger cover on desktop only. */
 #rcnp-top-badge .rcnp-cover {
   width: 50px !important;
   height: 50px !important;
@@ -81,12 +81,12 @@
   display: none !important;
 }
 
-/* === LOGO lijevo pored hamburgera — samo na header koji SADRŽI #qwLogo === */
+/* === Logo to the left of the menu button, only in the header containing #qwLogo === */
 header:has(#qwLogo),
 .site-header:has(#qwLogo),
 #masthead:has(#qwLogo) {
   position: relative !important;
-  padding-left: 300px !important; /* prostor za #qwLogo */
+  padding-left: 300px !important; /* space reserved for #qwLogo */
 }
 
 /* Pozicioniranje loga */
@@ -106,7 +106,7 @@ header:has(#qwLogo),
   max-width: 240px;
 }
 
-/* Z-index za hamburger/toggler samo unutar istog headera */
+/* Menu/toggler z-index only inside the same header. */
 header:has(#qwLogo) .menu-toggle,
 header:has(#qwLogo) .mobile-menu-toggle,
 header:has(#qwLogo) .navbar-toggler,
