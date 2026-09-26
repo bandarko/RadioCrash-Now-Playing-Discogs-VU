@@ -23,7 +23,7 @@ Detaljno objašnjenje zašto Safari treba serverski numeric-only feed, kako je i
 - SSE veza postoji samo dok glavni player svira.
 - Safari čeka stvarni `playing` događaj, pa VU ne kreće prije zvuka.
 - Safari koristi istu RMS skalu i gain `24` kao ostali desktop preglednici.
-- Serverski feed šalje 60 mjerenja u sekundi, analizira zadnjih 256 stereo uzoraka i koristi 1,5 s vremenskog pomaka.
+- Serverski feed šalje 60 mjerenja u sekundi, analizira zadnjih 256 stereo uzoraka i koristi 1,10 s vremenskog pomaka (66 mjerenja).
 - Safari crta svaku pristiglu stvarnu SSE razinu izravno. Naknadno iskušano vezivanje uz `requestAnimationFrame` nije zadržano jer je na produkcijskoj stranici izgledalo tromije.
 - Stop radi `unload()` postojećeg SoundManager objekta, pa svaki novi Play dobiva svjež AAC live stream bez preskakanja i digitalnih artefakata.
 - Rast razine je trenutačan kao u Chromeu; samo pad LED-ica ima kratki decay.
@@ -50,4 +50,4 @@ Nakon spremanja napravi hard refresh.
 4. Chrome, Firefox i Brave: postojeći lokalni VU i dalje radi.
 5. Mobitel ili viewport do 900 px: nema VU elementa ni SSE veze.
 
-Server-side servis i javni endpoint instalirani su 24. 9. 2026. Produkcijska konfiguracija potvrđena je na 60,0 poruka/s, 256-frame analizi i 1,5 s bufferu. Izolirani Safari 26.6.2 test prošao je 5/5 uzastopnih Stop/Play ciklusa bez greške, duplog audio streama ili zaostalog AAC buffera.
+Server-side servis i javni endpoint instalirani su 24. 9. 2026. Produkcijska konfiguracija 26. 9. 2026. potvrđena je na 60,0 poruka/s, 256-frame analizi i 1,10 s bufferu. Vrijednost je dobivena postupnim produkcijskim A/B podešavanjem s 1,50 preko 1,25 na 1,10 s. Izolirani Safari 26.6.2 test prošao je 5/5 uzastopnih Stop/Play ciklusa bez greške, duplog audio streama ili zaostalog AAC buffera.

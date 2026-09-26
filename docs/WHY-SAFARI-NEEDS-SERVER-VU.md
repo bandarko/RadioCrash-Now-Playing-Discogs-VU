@@ -87,7 +87,7 @@ Shoutcast live.mp3 ──────┤  postojeći browser player → lokalni 
                            └─ streaming server
                                 └─ jedan FFmpeg decoder
                                      └─ PCM L/R RMS + peak
-                                          └─ 1,5 s red razina
+                                          └─ 1,10 s red razina
                                                └─ SSE brojke
                                                     └─ Safari LED VU
 
@@ -101,7 +101,7 @@ Servis `rc-vu.service` otvara jednu lokalnu vezu prema `http://127.0.0.1:8000/li
 - `peakDbL` i `peakDbR`;
 - 60 mjerenja u sekundi;
 - zadnjih 256 stereo frameova po mjerenju;
-- red razina od 1,5 sekundi za približno poravnanje s reprodukcijskim bufferom.
+- red razina od 1,10 sekundi (66 mjerenja) za približno poravnanje s reprodukcijskim bufferom.
 
 Nginx javno izlaže samo:
 
@@ -126,9 +126,9 @@ To izbjegava dupli zvuk, udvostručen promet prema streamu i dvije reprodukcije 
 Chromeov analyser i zvuk koriste isti lokalni media clock. Safari VU i Safari zvuk koriste dva vremenska puta:
 
 1. browser samostalno buffera i reproducira audio;
-2. server analizira isti program blizu izvora, zatim odgađa brojčane razine za fiksnih 1,5 sekundi i šalje ih mrežom.
+2. server analizira isti program blizu izvora, zatim odgađa brojčane razine za fiksnih 1,10 sekundi i šalje ih mrežom.
 
-Safari, mreža i SoundManager mogu dinamički mijenjati količinu audio buffera. SSE nema pristup točnom trenutku uzorka koji Safari upravo šalje prema zvučnicima, pa fiksnih 1,5 sekundi predstavlja praktično, izmjereno poravnanje, a ne sample-accurate sinkronizaciju.
+Safari, mreža i SoundManager mogu dinamički mijenjati količinu audio buffera. SSE nema pristup točnom trenutku uzorka koji Safari upravo šalje prema zvučnicima, pa fiksnih 1,10 sekundi predstavlja praktično, produkcijski izmjereno poravnanje, a ne sample-accurate sinkronizaciju. Vrijednost je 26. 9. 2026. podešena s 1,50 preko 1,25 na 1,10 s prema stvarnoj Safari reprodukciji.
 
 Zbog toga se mogu primijetiti male razlike:
 

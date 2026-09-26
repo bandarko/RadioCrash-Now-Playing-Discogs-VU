@@ -12,7 +12,7 @@ listen:           127.0.0.1:8767
 sample rate:      44100 Hz stereo
 update rate:      60 measurements/second
 analysis window:  latest 256 stereo frames
-alignment buffer: 1.5 seconds
+alignment buffer: 1.10 seconds (66 measurements)
 memory limit:     256 MB
 CPU quota:        30%
 ```
@@ -35,6 +35,7 @@ Public Nginx endpoints:
 - `nginx-radiocrash-vu.conf` — no-buffer SSE and status routes;
 - `deploy.sh` — guarded first installation including the Nginx snippet;
 - `upgrade-v3-3.sh` — guarded upgrade of an existing VU service;
+- `tune-buffer.sh` — guarded 0.5–2.5 second alignment adjustment with rollback;
 - `rollback.sh` — rollback of the Nginx integration created by `deploy.sh`.
 
 The Nginx snippet uses the existing `$cors_allow` variable from the Radio Crash stream virtual host. Verify that mapping before using the snippet on another server.
@@ -65,7 +66,7 @@ The deploy script validates prerequisites and Python syntax, backs up the existi
 sudo /home/banadmin/rc-vu-staging/upgrade-v3-3.sh
 ```
 
-The upgrade script backs up the installed Python program and systemd unit, restarts only `rc-vu.service`, verifies the exact 60/1.5/256 configuration and restores the previous service automatically if validation fails. It does not change Nginx or Shoutcast.
+The upgrade script backs up the installed Python program and systemd unit, restarts only `rc-vu.service`, verifies the exact 60/1.10/256 configuration and restores the previous service automatically if validation fails. It does not change Nginx or Shoutcast.
 
 Two initial `curl: (7)` messages can occur while systemd is replacing the old process. The final JSON health response and success line are authoritative.
 
@@ -79,10 +80,22 @@ systemctl --no-pager --full status rc-vu.service
 The health JSON must include:
 
 ```json
-{"online":true,"updatesPerSecond":60,"bufferSeconds":1.5,"analysisFrames":256,"queueDepth":90}
+{"online":true,"updatesPerSecond":60,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":66}
 ```
 
 Other live level and process fields will vary.
+
+## Alignment tuning
+
+The production value was calibrated on 26 September 2026: 1.50 seconds was slightly late, 1.25 seconds improved the match, and 1.10 seconds was accepted in the live Safari comparison.
+
+For a controlled future adjustment:
+
+```bash
+sudo /home/banadmin/rc-vu-staging/tune-buffer.sh 1.10
+```
+
+The script accepts 0.5–2.5 seconds, backs up the active service unit, restarts only `rc-vu.service`, verifies the requested value and automatically restores the previous unit on failure.
 
 ## First-install rollback
 

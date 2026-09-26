@@ -42,7 +42,7 @@ done
 
 python3 -m py_compile "${SOURCE_DIR}/rc_vu_server.py"
 grep -Fq 'Environment=RC_VU_UPDATES_PER_SECOND=60' "${SOURCE_DIR}/rc-vu.service"
-grep -Fq 'Environment=RC_VU_BUFFER_SECONDS=1.5' "${SOURCE_DIR}/rc-vu.service"
+grep -Fq 'Environment=RC_VU_BUFFER_SECONDS=1.10' "${SOURCE_DIR}/rc-vu.service"
 grep -Fq 'Environment=RC_VU_ANALYSIS_FRAMES=256' "${SOURCE_DIR}/rc-vu.service"
 
 mkdir -p "${BACKUP_DIR}"
@@ -59,7 +59,7 @@ for _attempt in $(seq 1 40); do
     if curl -fsS --max-time 2 http://127.0.0.1:8767/health > "${HEALTH_FILE}" \
         && grep -Fq '"online":true' "${HEALTH_FILE}" \
         && grep -Fq '"updatesPerSecond":60' "${HEALTH_FILE}" \
-        && grep -Fq '"bufferSeconds":1.5' "${HEALTH_FILE}" \
+        && grep -Fq '"bufferSeconds":1.1' "${HEALTH_FILE}" \
         && grep -Fq '"analysisFrames":256' "${HEALTH_FILE}"; then
         ready=1
         break
@@ -76,6 +76,6 @@ fi
 SUCCESS=1
 cat "${HEALTH_FILE}"
 echo
-echo "VU v3.3 aktivan: 60 mjerenja/s, 256-frame analiza, buffer 1.5 s."
+echo "VU v3.3 aktivan: 60 mjerenja/s, 256-frame analiza, buffer 1.10 s."
 echo "Backup programa: ${APP_BACKUP}"
 echo "Backup servisa: ${SERVICE_BACKUP}"

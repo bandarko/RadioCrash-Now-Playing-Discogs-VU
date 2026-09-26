@@ -12,7 +12,7 @@ The repository contains one integrated system:
 
 ## Current production state
 
-Verified on 24 September 2026:
+Verified on 26 September 2026:
 
 | Component | Current version / configuration |
 | --- | --- |
@@ -22,7 +22,7 @@ Verified on 24 September 2026:
 | Safari | real numeric stereo levels over SSE |
 | Server update rate | 60 measurements per second |
 | Server analysis window | latest 256 stereo frames |
-| Alignment buffer | 1.5 seconds |
+| Alignment buffer | 1.10 seconds (66 measurements) |
 | VU layout | 18 LED segments per channel; disabled at 900 px and below |
 
 The short-lived v3.4 `requestAnimationFrame` display-sync experiment was rejected after production testing because its movement looked slower in Safari. The repository therefore intentionally contains the better v3.3 direct-SSE renderer.
@@ -76,6 +76,7 @@ On Safari only, v3.3 calls `unload()` on the existing SoundManager sound after S
 │   ├── rc-vu.service
 │   ├── rc_vu_server.py
 │   ├── rollback.sh
+│   ├── tune-buffer.sh
 │   └── upgrade-v3-3.sh
 └── tests/
     ├── harness_server.py
@@ -121,10 +122,12 @@ The upgrade script:
 - validates the Python and systemd sources;
 - backs up the installed program and service unit;
 - restarts only `rc-vu.service`;
-- verifies 60 Hz, 1.5 seconds and 256-frame analysis;
+- verifies 60 Hz, 1.10 seconds and 256-frame analysis;
 - automatically restores the previous version if validation fails.
 
 It does not restart Nginx, Shoutcast or the host. See [`server-vu/README.md`](server-vu/README.md) for first installation and rollback details.
+
+The alignment buffer was calibrated on the production Safari player on 26 September 2026. The earlier 1.50-second setting still lagged the audible signal slightly; 1.25 seconds improved it, and 1.10 seconds was accepted as the best observed alignment. This remains an empirical Safari timing value, not sample-accurate synchronization.
 
 ## Verified tests
 

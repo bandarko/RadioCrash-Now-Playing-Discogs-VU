@@ -84,4 +84,10 @@ Izolirani Safari test prošao je 5/5 ciklusa: pet otvaranja SSE veze, 50 obrađe
 
 Iskušano je crtanje najnovije stvarne SSE razine jednom po `requestAnimationFrame` frameu. Izolirani regresijski test prošao je 5/5 Stop/Play ciklusa, ali je korisnička provjera na stvarnoj produkcijskoj stranici pokazala lošije, tromije kretanje nego u v3.3.
 
-Zato je v3.4 odbačen i klijentski kod vraćen na izravno crtanje svakog SSE događaja iz v3.3. Serverskih 60 mjerenja/s, 256-frame analiza, gain, stereo razdvajanje, 1,5 s buffer i Safari `unload()` popravak ostali su nepromijenjeni.
+Zato je v3.4 odbačen i klijentski kod vraćen na izravno crtanje svakog SSE događaja iz v3.3. Serverskih 60 mjerenja/s, 256-frame analiza, gain, stereo razdvajanje i Safari `unload()` popravak ostali su nepromijenjeni. Buffer je u tom trenutku ostao 1,5 s, a naknadno je zasebno vremenski kalibriran.
+
+## Produkcijska vremenska kalibracija 26. 9. 2026.
+
+Javni SSE transport ponovno je provjeren na 60 poruka/s bez rupa, rastućeg reda ili mrežnog zaostatka. Produkcijska usporedba pokazala je da 1,50 s fiksnog buffera u Safariju malo kasni za čujnim signalom. Vrijednost 1,25 s bila je bolja, a 1,10 s prihvaćena je kao dobro vizualno poravnanje.
+
+Aktivna konfiguracija zato koristi 66 mjerenja pri 60 mjerenja/s, odnosno 1,10 s. To je empirijska vrijednost: Safari i dalje može dinamički promijeniti vlastiti audio-buffer, pa rješenje nije sample-accurate. Pokušaj automatskog poravnanja sa zasebno pokrenutim Brave playerom nije korišten za promjenu konfiguracije jer svaki preglednik reproducira vlastitu poziciju live streama i izmjerena korelacija nije bila dovoljno pouzdana.

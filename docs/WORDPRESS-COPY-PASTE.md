@@ -22,7 +22,7 @@ JavaScript sadrži postojeći Now Playing/Discogs dio i **hybrid real VU v3.3 Sa
 - EventSource je otvoren samo dok glavni player svira i zatvara se na Stop.
 - Safari čeka stvarni `playing` događaj; VU zato ne kreće tijekom sporog učitavanja streama.
 - Safari dBFS pretvara istom RMS formulom i gainom `24` kao Chrome/Firefox/Brave.
-- Safari feed radi na 60 mjerenja/s, koristi isti kratki prozor od 256 uzoraka kao Chrome i serverski pomak od 1,5 s.
+- Safari feed radi na 60 mjerenja/s, koristi isti kratki prozor od 256 uzoraka kao Chrome i produkcijski kalibriran serverski pomak od 1,10 s.
 - Safari crta svaku pristiglu stvarnu SSE razinu izravno; to se na produkcijskoj stranici pokazalo življim od naknadno iskušanog `requestAnimationFrame` raspoređivanja.
 - Stop stvarno radi `unload()` postojećeg SoundManager streama, pa sljedeći Play ne nastavlja stari AAC buffer.
 - Napad LED-ica je trenutačan kao u Chromeu; decay se primjenjuje samo pri padu.
