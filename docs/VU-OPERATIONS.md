@@ -1,4 +1,4 @@
-# Radio Crash hybrid VU v3.5 operations guide
+# Radio Crash hybrid VU v4.0 operations guide
 
 This runbook describes the production layout, routine checks, safe tuning and rollback procedures for the Radio Crash stereo VU meter.
 
@@ -6,14 +6,15 @@ This runbook describes the production layout, routine checks, safe tuning and ro
 
 | Setting | Production value |
 | --- | --- |
-| Client version | `hybrid real VU v3.5 time-normalized decay` |
+| Client version | `hybrid real VU v4.0 adaptive sync` |
 | LED segments | 18 per channel |
 | Server update rate | 120 measurements/s |
 | Analysis window | latest 256 stereo frames |
-| Alignment buffer | 1.10 seconds / 132 measurements |
+| Server base delay | 1.10 seconds / 132 measurements |
+| Numeric history | 30 seconds / 3,600 measurements |
 | Browser cutoff | disabled at 900 px and below |
 
-Do not change more than one of the update rate, analysis window, alignment buffer or client response curve at a time. The current combination was accepted in a side-by-side Safari and Chrome production test on 26 September 2026.
+Do not change more than one of the update rate, analysis window, server base delay, history size or client response curve at a time. The v4 adaptive client and production backend were verified on 2 October 2026.
 
 ## Code locations
 
@@ -36,12 +37,13 @@ The VU is not a separate WordPress plugin. It is the final section of the same J
 /home/banadmin/rc-vu-staging/
 ```
 
-The service listens only on `127.0.0.1:8767`. Nginx exposes the read-only status and SSE routes.
+The service listens only on `127.0.0.1:8767`. Nginx exposes the read-only status, SSE and history routes.
 
 ## Browser behavior
 
 - Chrome, Firefox and Brave attach Web Audio analysers to the existing SoundManager2 audio element.
 - Safari receives real numeric L/R levels from `https://live.radiocrash.net/vu/events` through `EventSource`.
+- Safari fetches `https://live.radiocrash.net/vu/history` once when playback starts, measures `buffered.end − currentTime` and selects the timestamped sample that matches the audible position.
 - Safari waits for the existing player to emit `playing`; the meter cannot start before audible playback.
 - Stop closes the SSE connection, resets the LEDs and unloads the stale Safari AAC connection from the existing SoundManager object.
 - No path creates a second `Audio` object, starts another browser audio stream or uses random/fake level animation.
@@ -67,6 +69,8 @@ Expected invariant fields:
   "bufferSeconds": 1.1,
   "analysisFrames": 256,
   "queueDepth": 132,
+  "historySeconds": 30.0,
+  "historyDepth": 3600,
   "lastError": ""
 }
 ```
@@ -90,20 +94,20 @@ The VU service is independent of the public audio player. A VU failure should be
 3. Run the guarded upgrade:
 
 ```bash
-sudo /home/banadmin/rc-vu-staging/upgrade-v3-3.sh
+sudo /home/banadmin/rc-vu-staging/upgrade-v4-adaptive.sh
 ```
 
-The filename is retained for compatibility with the installed staging workflow. The script validates the current production baseline of 120/1.10/256, creates backups, restarts only `rc-vu.service`, verifies health and restores the previous files automatically if validation fails.
+The script validates the 120/1.10/256/30 production baseline, backs up the Python program, systemd unit and Nginx snippet, restarts only `rc-vu.service`, validates and reloads Nginx, verifies local and public history, and restores all previous files automatically if validation fails.
 
 ## Controlled tuning
 
-### Alignment buffer
+### Server base delay
 
 ```bash
 sudo /home/banadmin/rc-vu-staging/tune-buffer.sh 1.10
 ```
 
-Accepted range: 0.5–2.5 seconds. Lower values move the Safari meter earlier; higher values move it later. This changes visual alignment, not the audio player's startup buffer.
+Accepted range: 0.5–2.5 seconds. This value is already subtracted from Safari's measured player buffer by v4. Treat it as an analyser-path base delay, not a location-specific manual sync control.
 
 ### Measurement rate
 
@@ -128,8 +132,9 @@ Test on the production page after every client or lifecycle change:
 3. Safari Stop/Play repeated at least five times: no skipping, digital artifacts, silence or duplicate sound.
 4. Safari stereo: L and R can show different values.
 5. Chrome, Firefox and Brave: the local existing-player analyser still works.
-6. Network panel: exactly one browser audio stream; `/vu/events` is a small text/event-stream connection.
-7. Mobile or viewport at 900 px and below: no VU element and no SSE connection.
+6. Network panel: exactly one browser audio stream, one `/vu/events` text/event-stream connection and one `/vu/history` JSON request per playback start.
+7. Safari adaptive state: history is loaded and the measured buffer/additional delay are finite.
+8. Mobile or viewport at 900 px and below: no VU element and no VU network requests.
 
 The isolated Safari harness can be run with:
 
@@ -147,11 +152,11 @@ Check `lastError`, the service journal and whether FFmpeg can read `http://127.0
 
 ### Safari VU starts before sound
 
-Confirm the active WordPress JavaScript is the complete v3.5 file and that the Safari branch opens the feed only after `playing`, not on the initial `play` request.
+Confirm the active WordPress JavaScript is the complete v4 file and that the Safari branch opens the feed only after `playing`, not on the initial `play` request.
 
 ### Safari movement is delayed but otherwise correct
 
-Check that the server reports `bufferSeconds: 1.1`. Browser audio buffering can vary, so the alignment is empirical rather than sample-accurate. Adjust only in small controlled steps and compare against audible transients.
+Check `historySeconds: 30.0`, `historyDepth: 3600` and that `https://live.radiocrash.net/vu/history` returns HTTP 200. In client debug state, verify `historyReady`, `bufferAheadSeconds`, `extraDelaySeconds` and `serverSamples`. Do not tune the 1.10-second base delay to compensate for a variable browser buffer.
 
 ### Safari looks less responsive than Chrome
 

@@ -1,8 +1,8 @@
 # Why Safari needs a server-side VU feed
 
-Last verified: 26 September 2026
+Last verified: 2 October 2026
 
-Active implementation: `hybrid real VU v3.5 time-normalized decay`
+Active implementation: `hybrid real VU v4.0 adaptive sync`
 
 ## Short answer
 
@@ -88,8 +88,10 @@ Shoutcast live.mp3 ────────┤  existing browser player → loca
                                 └─ one shared FFmpeg decoder
                                      └─ PCM L/R RMS + peak
                                           └─ 1.10 s level queue
-                                               └─ numeric SSE events
-                                                    └─ Safari LED VU
+                                               ├─ numeric SSE events
+                                               └─ 30 s numeric history
+                                                    └─ Safari buffer measurement
+                                                         └─ timestamp selection → LED VU
 
 Safari audio: existing browser player → speakers
 Safari VU:    numeric SSE data → LED display
@@ -102,10 +104,12 @@ Safari VU:    numeric SSE data → LED display
 - 120 measurements/s;
 - the latest 256 stereo frames per measurement;
 - a 1.10-second queue containing 132 measurements.
+- a 30-second rolling history containing 3,600 compact RMS entries.
 
 Nginx exposes only:
 
 - `https://live.radiocrash.net/vu/events` — numeric SSE levels;
+- `https://live.radiocrash.net/vu/history` — recent timestamped numeric RMS history;
 - `https://live.radiocrash.net/vu/status` — service health and configuration.
 
 The service does not record audio, store it on disk or send audio to website visitors.
@@ -126,16 +130,20 @@ This avoids duplicate sound, duplicate stream bandwidth and two independent play
 Chrome's analyser and its audible audio share the same local media clock. Safari uses two timing paths:
 
 1. the browser buffers and plays the audio stream;
-2. the server analyses the program near its source, delays numeric levels by 1.10 seconds and sends them over SSE.
+2. the server analyses the program near its source, applies a 1.10-second base delay and sends timestamped numeric levels over SSE.
 
-Safari, the network and SoundManager can change playback buffering dynamically. The SSE connection cannot ask Safari which exact sample is currently reaching the speakers. The 1.10-second delay is therefore an empirically calibrated alignment, not sample-accurate synchronization.
+Safari, the network and SoundManager can change playback buffering dynamically. On 2 October 2026 the tested Safari player held roughly 7–9 seconds of buffered audio on an FTTH connection, which explained why a fixed 1.10-second meter could show real but visibly unrelated levels.
+
+v4 reads the media element's exposed `buffered` range and calculates `buffered.end − currentTime` every 200 ms. It keeps the median of the latest nine valid readings, subtracts the 1.10-second server base delay and selects the nearest timestamped L/R sample from `/vu/history`. This makes the visual delay follow the actual player buffer instead of the listener's location or connection speed.
+
+The embedded server timestamps, rather than local SSE arrival times, drive sample selection. TCP may deliver several SSE packets together; using their original timestamps preserves the 120 Hz measurement sequence. If the history request fails, Safari temporarily displays the real live feed and retries after two seconds. It never falls back to random animation.
 
 The final response matching required two additional choices:
 
 - decay is expressed as 36 LED segments/s instead of a fixed amount per browser frame;
 - the server publishes 120 measurements/s so it captures short peaks at the same cadence as the tested Chrome/Brave analyser on a ProMotion display.
 
-The final production comparison was judged visually equivalent. Small temporary differences can still occur if Safari changes its audio buffer, reduces page rendering frequency or experiences network jitter.
+The real-stream v4 test measured changing buffers around 7.6–8.0 seconds and automatically selected additional delays around 6.5–6.9 seconds. Small temporary differences can still occur while the nine-reading median settles, if Safari reduces page rendering frequency or if the audio and SSE connections experience materially different network delay.
 
 ## Safari player lifecycle
 
@@ -165,7 +173,7 @@ Both were tested. Playback continued to work, but Safari's analyser still return
 
 ### Safari rendering through `requestAnimationFrame`
 
-The experimental v3.4 client stored the newest SSE level and rendered it on Safari's animation frame. It passed the isolated lifecycle test but looked slower on the production page. v3.5 therefore renders every incoming SSE measurement directly while keeping decay independent of event or frame count.
+The experimental v3.4 client stored the newest SSE level and rendered it on Safari's animation frame. It passed the isolated lifecycle test but looked slower on the production page. v3.5 restored direct SSE rendering. v4 keeps that responsive renderer but selects the correctly delayed historic measurement for each timestamped event.
 
 ## When to reconsider local Web Audio in Safari
 
@@ -178,7 +186,7 @@ Keep the server-side path until a new Safari/WebKit release passes all of these 
 5. at least five Stop/Play cycles complete without skipping, artifacts or silence;
 6. behavior is confirmed on the production page, not only with a finite audio file.
 
-If all checks pass, Safari can return to the same local analyser path as Chrome and the estimated server alignment can be removed.
+If all checks pass, Safari can return to the same local analyser path as Chrome and the server-side adaptive alignment can be removed.
 
 ## Related documentation
 

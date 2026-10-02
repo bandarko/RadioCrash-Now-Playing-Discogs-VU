@@ -15,6 +15,7 @@ sample rate:      44100 Hz stereo
 update rate:      120 measurements/second
 analysis window:  latest 256 stereo frames
 alignment buffer: 1.10 seconds (132 measurements)
+history window:   30 seconds (3,600 measurements)
 memory limit:     256 MB
 CPU quota:        30%
 ```
@@ -24,11 +25,13 @@ Local endpoints:
 - `http://127.0.0.1:8767/health`
 - `http://127.0.0.1:8767/snapshot`
 - `http://127.0.0.1:8767/events`
+- `http://127.0.0.1:8767/history`
 
 Public Nginx endpoints:
 
 - `https://live.radiocrash.net/vu/status`
 - `https://live.radiocrash.net/vu/events`
+- `https://live.radiocrash.net/vu/history`
 
 ## Files
 
@@ -37,6 +40,7 @@ Public Nginx endpoints:
 - `nginx-radiocrash-vu.conf` — no-buffer SSE and status routes;
 - `deploy.sh` — guarded first installation including the Nginx snippet;
 - `upgrade-v3-3.sh` — guarded upgrade of an existing VU service;
+- `upgrade-v4-adaptive.sh` — guarded adaptive-history upgrade including the Nginx route;
 - `tune-buffer.sh` — guarded 0.5–2.5 second alignment adjustment with rollback;
 - `tune-rate.sh` — guarded 30/60/90/120 Hz update-rate adjustment with rollback;
 - `rollback.sh` — rollback of the Nginx integration created by `deploy.sh`.
@@ -68,10 +72,10 @@ The deploy script validates prerequisites and Python syntax, backs up the existi
 ## Upgrade an existing installation
 
 ```bash
-sudo /home/banadmin/rc-vu-staging/upgrade-v3-3.sh
+sudo /home/banadmin/rc-vu-staging/upgrade-v4-adaptive.sh
 ```
 
-The upgrade script backs up the installed Python program and systemd unit, restarts only `rc-vu.service`, verifies the exact 120/1.10/256 configuration and restores the previous service automatically if validation fails. It does not change Nginx or Shoutcast.
+The upgrade script backs up the installed Python program, systemd unit and Nginx snippet. It restarts only `rc-vu.service`, validates and reloads Nginx, verifies the exact 120/1.10/256/30 configuration and restores all three previous files automatically if validation fails. It does not restart Shoutcast or the host.
 
 Two initial `curl: (7)` messages can occur while systemd is replacing the old process. The final JSON health response and success line are authoritative.
 
@@ -85,7 +89,7 @@ systemctl --no-pager --full status rc-vu.service
 The health JSON must include:
 
 ```json
-{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132}
+{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132,"historySeconds":30.0,"historyDepth":3600}
 ```
 
 Other live level and process fields will vary.
@@ -100,9 +104,15 @@ ss -ltnp 'sport = :8767'
 
 An empty `lastError`, a low `ageMs` and a continuously increasing `seq` indicate a healthy analyser loop.
 
-## Alignment tuning
+## Adaptive alignment
 
-The production value was calibrated on 26 September 2026: 1.50 seconds was slightly late, 1.25 seconds improved the match, and 1.10 seconds was accepted in the live Safari comparison.
+The 1.10-second queue is the server's base delay. Safari v4 measures its own current audio buffer and selects the corresponding timestamped measurement from `/vu/history`. The client therefore adapts when Safari changes its playback buffer; the server base delay normally does not need location- or connection-specific tuning.
+
+The `/history` payload keeps 30 seconds / 3,600 compact `[seq, serverTime, rmsDbL, rmsDbR]` entries in memory. It does not store audio and is fetched only when Safari playback starts.
+
+### Base-delay tuning
+
+The production base value was calibrated on 26 September 2026 and retained by v4. Change it only if the server analyser itself is shown to have a stable timing error; do not use it to compensate for Safari's variable browser buffer.
 
 For a controlled future adjustment:
 
@@ -135,7 +145,7 @@ This restores the Nginx file saved by the most recent `deploy.sh`, validates and
 - `online: false`: inspect `lastError`, the service journal and local access to port 8000.
 - Public `/vu/status` fails but local `/health` works: inspect the Nginx include and CORS mapping.
 - Levels work but Safari audio is silent: investigate the browser player separately; the numeric feed and browser audio are different connections.
-- Safari timing changes after a browser update: verify the current 1.10-second delay before adjusting it, and change only one parameter at a time.
-- Repeated Stop/Play breaks audio: verify that the deployed v3.5 client still unloads the existing Safari SoundManager stream on Stop.
+- Safari timing changes after a browser update: confirm `historyDepth: 3600`, the public `/vu/history` route and the client's `server-adaptive` mode before changing the base delay.
+- Repeated Stop/Play breaks audio: verify that the deployed v4 client still unloads the existing Safari SoundManager stream on Stop.
 
 Do not delete package-manager lock files, restart the entire host or restart unrelated streaming services as a first response to a VU-only failure.

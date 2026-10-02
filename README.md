@@ -14,20 +14,21 @@ The design has one non-negotiable rule: the browser must use the existing player
 
 ## Current production state
 
-Verified on 26 September 2026:
+Verified on 2 October 2026:
 
 | Component | Current version / configuration |
 | --- | --- |
-| WordPress JavaScript | `hybrid real VU v3.5 time-normalized decay` |
+| WordPress JavaScript | `hybrid real VU v4.0 adaptive sync` |
 | WordPress CSS | documented production styling |
 | Chrome / Firefox / Brave | local Web Audio analyser, `fftSize=256` |
-| Safari | real numeric stereo levels over SSE |
+| Safari | real numeric stereo levels with adaptive buffer synchronization |
 | Server update rate | 120 measurements per second |
 | Server analysis window | latest 256 stereo frames |
-| Alignment buffer | 1.10 seconds (132 measurements) |
+| Server base delay | 1.10 seconds (132 measurements) |
+| Server history | 30 seconds (3,600 measurements) |
 | VU layout | 18 LED segments per channel; disabled at 900 px and below |
 
-The short-lived v3.4 `requestAnimationFrame` display-sync experiment was rejected after production testing because its movement looked slower in Safari. Version v3.5 keeps direct SSE rendering, normalizes LED decay by elapsed time and uses a 120 Hz server feed to match the response of Chrome/Brave on a ProMotion display.
+Version v4 measures Safari's current `buffered.end − currentTime`, smooths that value and selects the matching real L/R sample from a 30-second server history. It therefore follows changes in Safari's playback buffer instead of relying on one fixed, manually calibrated delay. The 120 Hz direct-event renderer and time-normalized decay from v3.5 remain in place.
 
 ## Documentation
 
@@ -50,7 +51,7 @@ curl -fsS https://live.radiocrash.net/vu/status
 The response should contain these invariant values:
 
 ```json
-{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132,"lastError":""}
+{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132,"historySeconds":30.0,"historyDepth":3600,"lastError":""}
 ```
 
 Live levels, sequence numbers, timestamps, client count, process ID and `ageMs` are expected to vary.
@@ -71,11 +72,14 @@ Safari opens:
 
 ```text
 https://live.radiocrash.net/vu/events
+https://live.radiocrash.net/vu/history
 ```
 
-only after the real player emits `playing`, and closes it on Stop. The SSE endpoint is numeric data, not audio.
+only after the real player emits `playing`, and closes the SSE feed on Stop. The history endpoint is fetched once per playback start. Both endpoints contain numeric data, not audio.
 
 The server analyses the latest 256 stereo frames 120 times per second. The browser uses the same RMS-to-LED calculation and gain (`24`) as the local Chrome/Firefox/Brave implementation.
+
+Safari measures the buffered audio ahead of its current playback position every 200 ms. A nine-reading median rejects short buffer jitter. The client subtracts the server's 1.10-second base delay and selects the nearest timestamped measurement from the history. If history is temporarily unavailable, the meter continues with the real live SSE feed and retries automatically; it never substitutes fake movement.
 
 ### Safari Stop/Start fix
 
@@ -107,10 +111,13 @@ On Safari only, the current client calls `unload()` on the existing SoundManager
 │   ├── rollback.sh
 │   ├── tune-buffer.sh
 │   ├── tune-rate.sh
-│   └── upgrade-v3-3.sh
+│   ├── upgrade-v3-3.sh
+│   └── upgrade-v4-adaptive.sh
 └── tests/
     ├── harness_server.py
-    └── hybrid-vu-harness.html
+    ├── hybrid-vu-harness.html
+    ├── safari-buffer-diagnostic.html
+    └── safari-live-vu-harness.html
 ```
 
 ## WordPress deployment map
@@ -137,40 +144,44 @@ Public endpoints:
 ```text
 https://live.radiocrash.net/vu/status
 https://live.radiocrash.net/vu/events
+https://live.radiocrash.net/vu/history
 ```
 
-The service is bound to `127.0.0.1:8767`; Nginx exposes only the two public VU routes.
+The service is bound to `127.0.0.1:8767`; Nginx exposes only these three read-only VU routes.
 
 For an existing installation staged at `/home/banadmin/rc-vu-staging`:
 
 ```bash
-sudo /home/banadmin/rc-vu-staging/upgrade-v3-3.sh
+sudo /home/banadmin/rc-vu-staging/upgrade-v4-adaptive.sh
 ```
 
 The upgrade script:
 
-- validates the Python and systemd sources;
-- backs up the installed program and service unit;
+- validates the Python, systemd and Nginx sources;
+- backs up the installed program, service unit and Nginx snippet;
 - restarts only `rc-vu.service`;
-- verifies 120 Hz, 1.10 seconds and 256-frame analysis;
+- validates and reloads Nginx without restarting it;
+- verifies 120 Hz, 1.10 seconds, 256-frame analysis and 30 seconds of history;
 - automatically restores the previous version if validation fails.
 
-It does not restart Nginx, Shoutcast or the host. See [`server-vu/README.md`](server-vu/README.md) for first installation and rollback details.
+It does not restart Shoutcast or the host. See [`server-vu/README.md`](server-vu/README.md) for first installation and rollback details.
 
-The alignment buffer was calibrated on the production Safari player on 26 September 2026. The earlier 1.50-second setting still lagged the audible signal slightly; 1.25 seconds improved it, and 1.10 seconds was accepted as the best observed alignment. This remains an empirical Safari timing value, not sample-accurate synchronization.
+The 1.10-second queue is now a base server delay, not the complete Safari alignment. On 2 October 2026 Safari exposed roughly 7–9 seconds of buffered audio on the tested FTTH connection. v4 measured that value directly and selected the matching historic level sample, automatically changing the effective delay as the browser buffer changed.
 
 ## Verified tests
 
-The final isolated Safari 26.6.2 regression test completed five consecutive Stop/Play cycles:
+The final Safari 26.6.2 regression test on 2 October 2026 completed five consecutive Stop/Play cycles against the production backend:
 
 - five SSE connections;
 - 50 real stereo level messages;
 - five releases of the paused SoundManager stream;
+- a detected 7.0-second mock player buffer and calculated 5.9-second additional delay in every cycle;
+- a populated 3,600-sample history and active `server-adaptive` mode;
 - separate L/R LED values;
 - zero SSE errors;
 - 0/0 LEDs and a closed SSE connection after every Stop.
 
-The accepted production configuration runs at 120 updates/s. Immediately after activation Python used approximately 4.2% CPU and 19 MB RSS; FFmpeg used approximately 0.8% CPU and 48 MB RSS. The full service cgroup used about 21 MB. A live Safari/Chrome comparison was judged visually equivalent.
+The accepted production configuration runs at 120 updates/s. A separate real-stream Safari test measured changing browser buffers around 7.6–8.0 seconds and automatically calculated additional delays around 6.5–6.9 seconds. The live production page showed independently changing L/R values after deployment.
 
 The full Safari investigation and version history are in [`docs/SAFARI-TEST-REPORT.md`](docs/SAFARI-TEST-REPORT.md).
 

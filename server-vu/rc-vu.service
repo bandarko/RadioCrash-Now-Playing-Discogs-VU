@@ -15,6 +15,7 @@ Environment=RC_VU_LISTEN_PORT=8767
 Environment=RC_VU_UPDATES_PER_SECOND=120
 Environment=RC_VU_BUFFER_SECONDS=1.10
 Environment=RC_VU_ANALYSIS_FRAMES=256
+Environment=RC_VU_HISTORY_SECONDS=30
 ExecStart=/usr/bin/python3 /opt/radiocrash-vu/rc_vu_server.py
 Restart=always
 RestartSec=3

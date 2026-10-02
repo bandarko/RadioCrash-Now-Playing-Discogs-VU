@@ -30,15 +30,16 @@ The file contains three integrated features:
 
 - Now Playing text and links;
 - Discogs cover/release lookup through the WordPress proxy;
-- hybrid real stereo VU v3.5.
+- hybrid real stereo VU v4.0 adaptive sync.
 
 Important VU invariants:
 
 - Chrome, Firefox and Brave analyse only the existing SoundManager2 audio element.
 - Safari receives real numeric L/R levels from `https://live.radiocrash.net/vu/events`.
+- Safari loads 30 seconds of real timestamped RMS history from `https://live.radiocrash.net/vu/history`.
 - No branch creates a second `Audio` object or starts a second browser audio stream.
 - Safari waits for the real `playing` event before opening the level feed.
-- Safari uses 120 measurements/s, the latest 256 stereo frames and a calibrated 1.10-second server delay.
+- Safari measures `buffered.end − currentTime`, subtracts the 1.10-second server base delay and selects the nearest real history sample.
 - Attack is immediate; decay is normalized by elapsed time.
 - Safari Stop unloads the stale AAC connection from the existing SoundManager sound so the next Play starts cleanly.
 - At 900 px viewport width and below, the VU and its server connection are not initialized.
@@ -69,7 +70,7 @@ The CSS file is the documented full production copy. It contains the Now Playing
 4. Press Stop and confirm both channels return to zero.
 5. Repeat Stop/Play at least five times.
 6. Confirm there is no skipping, digital clicking, silence or duplicate sound.
-7. In the Network panel, confirm there is one browser audio stream and one small `/vu/events` text/event-stream connection.
+7. In the Network panel, confirm there is one browser audio stream, one small `/vu/events` text/event-stream connection and one `/vu/history` request.
 
 ### Chrome, Firefox and Brave desktop
 
@@ -79,20 +80,20 @@ The CSS file is the documented full production copy. It contains the Now Playing
 
 ### Mobile and narrow viewport
 
-At 900 px and below, confirm there is no `#rc-vu-mini` element and no request to `/vu/events`.
+At 900 px and below, confirm there is no `#rc-vu-mini` element and no request to `/vu/events` or `/vu/history`.
 
 ## Version confirmation
 
 The rendered page source should contain:
 
 ```text
-hybrid real VU v3.5 time-normalized decay
+HYBRID REAL VU v4.0 ADAPTIVE SYNC
 ```
 
 The public status endpoint should include:
 
 ```json
-{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132}
+{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132,"historySeconds":30.0,"historyDepth":3600}
 ```
 
 Other fields in the live JSON are expected to vary.
@@ -115,3 +116,5 @@ Do not attempt to fix a frontend regression by starting an additional muted play
 - The server was calibrated to 1.10 seconds and increased from 60 to 120 measurements/s on 26 September 2026.
 - The final side-by-side Safari and Chrome comparison was judged visually equivalent.
 - The isolated Safari lifecycle harness passed five consecutive Stop/Play cycles without a second browser audio stream.
+- v4 replaced the fixed total alignment with a measured Safari buffer and 30-second timestamped history on 2 October 2026.
+- The production v4 backend and WordPress client passed five consecutive Stop/Play cycles; a real-stream Safari run automatically followed buffers around 7.6–8.0 seconds.

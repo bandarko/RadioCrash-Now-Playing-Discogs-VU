@@ -71,6 +71,11 @@
       audio.currentSrc = "";
       audio.readyState = 0;
       audio.currentTime = 0;
+      audio.buffered = {
+        length: 1,
+        start: function () { return 0; },
+        end: function () { return audio.currentTime + 7; }
+      };
       audio.getAttribute = function () { return ""; };
       audio.setAttribute = function () {};
       let playToken = 0;
@@ -163,6 +168,11 @@
           if (!beforeStop.active || !beforeStop.safariPlaybackReady) fail("VU is not active after playing");
           if (window.__rcHarnessEvents.level <= levelsBefore) fail("no new SSE level events");
           if ((beforeStop.serverLevelEvents || 0) <= processedBefore) fail("SSE levels were not processed");
+          if ((beforeStop.historyLoads || 0) <= (debugBefore.historyLoads || 0)) fail("history was not loaded");
+          if ((beforeStop.serverSamples || 0) < 100) fail("history did not populate the sample queue");
+          if (Math.abs((beforeStop.bufferAheadSeconds || 0) - 7) > 0.1) fail("7-second player buffer was not detected");
+          if (Math.abs((beforeStop.extraDelaySeconds || 0) - 5.9) > 0.1) fail("adaptive delay was not calculated");
+          if (document.getElementById("rc-vu-mini").dataset.mode !== "server-adaptive") fail("adaptive mode was not active");
           if (!lit) fail("LEDs did not illuminate");
 
           button.click();
@@ -180,7 +190,10 @@
               sseOpens: window.__rcHarnessEvents.open,
               sseLevels: window.__rcHarnessEvents.level,
               renderedL: beforeStop.renderedL,
-              renderedR: beforeStop.renderedR
+              renderedR: beforeStop.renderedR,
+              bufferAhead: beforeStop.bufferAheadSeconds,
+              extraDelay: beforeStop.extraDelaySeconds,
+              samples: beforeStop.serverSamples
             });
 
             if (result.cycle < totalCycles) {
@@ -192,7 +205,11 @@
         }
 
         window.__rcHarnessOnLevel = function () {
-          if (window.__rcHarnessEvents.level - levelsBefore >= 10) {
+          const currentDebug = runtime && runtime.debugState ? runtime.debugState() : {};
+          if (
+            window.__rcHarnessEvents.level - levelsBefore >= 10 &&
+            currentDebug.historyReady
+          ) {
             queueMicrotask(finishPlayPhase);
           }
         };

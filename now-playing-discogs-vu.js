@@ -415,9 +415,11 @@
 })();
 
 
-/* === RC VU METER STEREO - HYBRID REAL VU v3.5 - 26.9.2026. ===
+/* === RC VU METER STEREO - HYBRID REAL VU v4.0 ADAPTIVE SYNC - 2.10.2026. ===
  * Chrome/Firefox/Brave: Web Audio analyses the existing player.
- * Safari: the server sends only real numeric L/R levels over SSE.
+ * Safari: the server sends real L/R levels and a short measurement history.
+ * The Safari path measures its own playback buffer and selects the server
+ * measurement that belongs to the audio frame currently being heard.
  * Neither path creates another Audio object or starts a second audio stream.
  */
 (function () {
@@ -425,6 +427,7 @@
   const LEGACY_RUNTIME_KEY = "RC_VU_EXISTING_PLAYER_RUNTIME";
   const GRAPH_KEY = "__rcVuExistingPlayerGraph";
   const SERVER_EVENTS_URL = "https://live.radiocrash.net/vu/events";
+  const SERVER_HISTORY_URL = "https://live.radiocrash.net/vu/history";
   const DEBUG = false;
 
   const userAgent = navigator.userAgent || "";
@@ -465,8 +468,23 @@
   let graphFailedFor = null;
 
   let eventSource = null;
+  let historyController = null;
+  let historyRetryTimer = null;
+  let historyReady = false;
   let safariPlaybackReady = false;
   let lastServerEventAt = 0;
+  let latestServerTime = 0;
+  let serverClockOffsetMs = 0;
+  let hasServerClockOffset = false;
+  let serverBufferSeconds = 1.1;
+  let serverSamples = [];
+  let bufferAheadReadings = [];
+  let bufferAheadSeconds = null;
+  let extraDelaySeconds = 0;
+  let lastBufferMeasureAt = 0;
+  let selectedServerSeq = 0;
+  let historyLoads = 0;
+  let adaptiveRenders = 0;
   let targetL = 0;
   let targetR = 0;
   let lastL = 0;
@@ -536,7 +554,7 @@
 
   function setMode(mode) {
     const vu = document.getElementById("rc-vu-mini");
-    if (vu) vu.dataset.mode = mode;
+    if (vu && vu.dataset.mode !== mode) vu.dataset.mode = mode;
   }
 
   function setLevel(channel, level) {
@@ -783,12 +801,212 @@
     setLevel("r", lastR);
   }
 
+  function normalizeServerSample(value) {
+    const sample = Array.isArray(value)
+      ? value
+      : [value && value.seq, value && value.serverTime, value && value.rmsDbL, value && value.rmsDbR];
+    const seq = Number(sample[0]);
+    const serverTime = Number(sample[1]);
+    const rmsDbL = Number(sample[2]);
+    const rmsDbR = Number(sample[3]);
+
+    if (![seq, serverTime, rmsDbL, rmsDbR].every(Number.isFinite)) return null;
+    return [seq, serverTime, rmsDbL, rmsDbR];
+  }
+
+  function trimServerSamples() {
+    if (serverSamples.length < 2) return;
+    const cutoff = serverSamples[serverSamples.length - 1][1] - 40000;
+    let first = 0;
+    while (first < serverSamples.length - 1 && serverSamples[first][1] < cutoff) first += 1;
+    if (first) serverSamples.splice(0, first);
+  }
+
+  function addLiveServerSample(value) {
+    const sample = normalizeServerSample(value);
+    if (!sample) return null;
+    const last = serverSamples[serverSamples.length - 1];
+
+    if (!last || sample[0] > last[0]) {
+      serverSamples.push(sample);
+    } else if (sample[0] === last[0]) {
+      serverSamples[serverSamples.length - 1] = sample;
+    } else if (!serverSamples.some(function (item) { return item[0] === sample[0]; })) {
+      serverSamples.push(sample);
+      serverSamples.sort(function (a, b) { return a[0] - b[0]; });
+    }
+
+    trimServerSamples();
+    return sample;
+  }
+
+  function mergeServerHistory(items) {
+    const bySequence = new Map();
+    serverSamples.forEach(function (sample) { bySequence.set(sample[0], sample); });
+    (Array.isArray(items) ? items : []).forEach(function (value) {
+      const sample = normalizeServerSample(value);
+      if (sample) bySequence.set(sample[0], sample);
+    });
+    serverSamples = Array.from(bySequence.values()).sort(function (a, b) { return a[0] - b[0]; });
+    trimServerSamples();
+  }
+
+  function measureSafariBuffer(force) {
+    const now = performance.now();
+    if (!force && now - lastBufferMeasureAt < 200) return bufferAheadSeconds;
+    lastBufferMeasureAt = now;
+
+    const audio = getMainAudio();
+    const ranges = audio && audio.buffered;
+    const currentTime = Number(audio && audio.currentTime);
+    if (!ranges || !Number.isFinite(currentTime) || !ranges.length) return bufferAheadSeconds;
+
+    let rangeEnd = null;
+    try {
+      for (let index = 0; index < ranges.length; index++) {
+        const start = Number(ranges.start(index));
+        const end = Number(ranges.end(index));
+        if (currentTime >= start - 0.25 && currentTime <= end + 0.25) {
+          rangeEnd = end;
+          break;
+        }
+      }
+    } catch (_) {
+      return bufferAheadSeconds;
+    }
+
+    const reading = Number(rangeEnd) - currentTime;
+    if (!Number.isFinite(reading) || reading < 0 || reading > 120) return bufferAheadSeconds;
+
+    bufferAheadReadings.push(reading);
+    if (bufferAheadReadings.length > 9) bufferAheadReadings.shift();
+    const ordered = bufferAheadReadings.slice().sort(function (a, b) { return a - b; });
+    bufferAheadSeconds = ordered[Math.floor(ordered.length / 2)];
+    extraDelaySeconds = Math.max(0, bufferAheadSeconds - serverBufferSeconds);
+    return bufferAheadSeconds;
+  }
+
+  function estimatedServerNow() {
+    // Advance from the timestamp in each received SSE packet, not its local
+    // arrival time. TCP may deliver several packets in one burst; the embedded
+    // timestamps preserve the original 120 Hz measurement cadence.
+    if (latestServerTime) return latestServerTime;
+    if (hasServerClockOffset) return Date.now() + serverClockOffsetMs;
+    return Date.now();
+  }
+
+  function sampleNearestTo(serverTime) {
+    if (!serverSamples.length) return null;
+    let low = 0;
+    let high = serverSamples.length;
+
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (serverSamples[middle][1] < serverTime) low = middle + 1;
+      else high = middle;
+    }
+
+    if (low <= 0) return serverSamples[0];
+    if (low >= serverSamples.length) return serverSamples[serverSamples.length - 1];
+    const before = serverSamples[low - 1];
+    const after = serverSamples[low];
+    return serverTime - before[1] <= after[1] - serverTime ? before : after;
+  }
+
+  function renderAdaptiveSafariLevel() {
+    measureSafariBuffer(false);
+    const desiredServerTime = estimatedServerNow() - extraDelaySeconds * 1000;
+    const historyCoversTarget = !!(
+      serverSamples.length && desiredServerTime >= serverSamples[0][1] - 100
+    );
+    const sample = historyCoversTarget
+      ? sampleNearestTo(desiredServerTime)
+      : serverSamples[serverSamples.length - 1];
+    if (!sample || sample[0] === selectedServerSeq) return;
+
+    selectedServerSeq = sample[0];
+    targetL = dbToLedLevel(sample[2]);
+    targetR = dbToLedLevel(sample[3]);
+    adaptiveRenders += 1;
+    renderSafariServerLevel();
+    setMode(
+      bufferAheadSeconds !== null && historyCoversTarget
+        ? "server-adaptive"
+        : "server-real"
+    );
+  }
+
+  function loadServerHistory() {
+    if (
+      !IS_SAFARI ||
+      !active ||
+      historyReady ||
+      historyController ||
+      typeof fetch !== "function"
+    ) return;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const requestMarker = {
+      abort: function () { if (controller) controller.abort(); }
+    };
+    const requestStartedAt = performance.now();
+    historyController = requestMarker;
+
+    fetch(SERVER_HISTORY_URL, {
+      cache: "no-store",
+      credentials: "omit",
+      signal: controller ? controller.signal : undefined
+    }).then(function (response) {
+      if (!response.ok) throw new Error("VU history HTTP " + response.status);
+      return response.json();
+    }).then(function (payload) {
+      if (!active || historyController !== requestMarker) return;
+      const roundTripMs = performance.now() - requestStartedAt;
+      const generatedAt = Number(payload && payload.generatedAt);
+      const bufferSeconds = Number(payload && payload.bufferSeconds);
+      if (Number.isFinite(generatedAt)) {
+        serverClockOffsetMs = generatedAt - (Date.now() - roundTripMs / 2);
+        hasServerClockOffset = true;
+      }
+      if (Number.isFinite(bufferSeconds) && bufferSeconds >= 0) {
+        serverBufferSeconds = bufferSeconds;
+      }
+      mergeServerHistory(payload && payload.items);
+      historyLoads += 1;
+      historyReady = true;
+      historyController = null;
+      measureSafariBuffer(true);
+      renderAdaptiveSafariLevel();
+    }).catch(function (error) {
+      if (!error || error.name !== "AbortError") log("VU history unavailable; using live feed.", error);
+      if (historyController === requestMarker) historyController = null;
+      if (active && (!error || error.name !== "AbortError")) {
+        clearTimeout(historyRetryTimer);
+        historyRetryTimer = setTimeout(loadServerHistory, 2000);
+      }
+    });
+  }
+
   function closeServerFeed() {
     if (eventSource) {
       eventSource.close();
       eventSource = null;
     }
+    if (historyController) {
+      try { historyController.abort(); } catch (_) {}
+      historyController = null;
+    }
+    clearTimeout(historyRetryTimer);
+    historyRetryTimer = null;
+    historyReady = false;
     lastServerEventAt = 0;
+    latestServerTime = 0;
+    hasServerClockOffset = false;
+    serverSamples = [];
+    bufferAheadReadings = [];
+    bufferAheadSeconds = null;
+    extraDelaySeconds = 0;
+    lastBufferMeasureAt = 0;
+    selectedServerSeq = 0;
     lastServerRenderAt = 0;
   }
 
@@ -802,6 +1020,7 @@
     setMode("server-connecting");
     const source = new EventSource(SERVER_EVENTS_URL);
     eventSource = source;
+    loadServerHistory();
 
     source.addEventListener("open", function () {
       if (eventSource !== source) return;
@@ -821,14 +1040,14 @@
           return;
         }
 
-        targetL = dbToLedLevel(data.rmsDbL);
-        targetR = dbToLedLevel(data.rmsDbR);
+        const sample = addLiveServerSample(data);
+        if (!sample) return;
+        latestServerTime = sample[1];
         serverLevelEvents += 1;
         lastServerEventAt = Date.now();
-        renderSafariServerLevel();
-        setMode("server-real");
+        renderAdaptiveSafariLevel();
       } catch (error) {
-        log("Neispravan VU SSE paket", error);
+        log("Invalid VU SSE packet", error);
       }
     });
 
@@ -838,7 +1057,7 @@
       targetR = 0;
       renderSafariServerLevel();
       setMode("server-reconnecting");
-      // EventSource se sam ponovno spaja; namjerno ga ne zamjenjujemo.
+      // EventSource reconnects itself; do not create a parallel connection.
     });
   }
 
@@ -1127,7 +1346,16 @@
         renderedL: renderedCount.l,
         renderedR: renderedCount.r,
         safariStreamReleases,
-        serverLevelEvents
+        serverLevelEvents,
+        historyLoads,
+        historyReady,
+        serverSamples: serverSamples.length,
+        bufferAheadSeconds,
+        serverBufferSeconds,
+        extraDelaySeconds,
+        selectedServerSeq,
+        adaptiveRenders,
+        serverClockOffsetMs: hasServerClockOffset ? serverClockOffsetMs : null
       };
     }
   };

@@ -30,6 +30,7 @@ SAMPLE_RATE = int(os.environ.get("RC_VU_SAMPLE_RATE", "44100"))
 UPDATES_PER_SECOND = int(os.environ.get("RC_VU_UPDATES_PER_SECOND", "10"))
 BUFFER_SECONDS = float(os.environ.get("RC_VU_BUFFER_SECONDS", "5"))
 ANALYSIS_FRAMES = int(os.environ.get("RC_VU_ANALYSIS_FRAMES", "0"))
+HISTORY_SECONDS = float(os.environ.get("RC_VU_HISTORY_SECONDS", "30"))
 FFMPEG_BIN = os.environ.get("RC_VU_FFMPEG", "/usr/bin/ffmpeg")
 
 
@@ -48,6 +49,9 @@ class LevelState:
         self.clients = 0
         self.ffmpeg_pid: int | None = None
         self.last_error = "waiting for analyser"
+        self.history: deque[list[float | int]] = deque(
+            maxlen=max(1, round(UPDATES_PER_SECOND * HISTORY_SECONDS))
+        )
 
     def publish(self, levels: dict[str, float]) -> None:
         with self.condition:
@@ -57,6 +61,14 @@ class LevelState:
                 "online": True,
                 **levels,
             }
+            self.history.append(
+                [
+                    int(self.snapshot["seq"]),
+                    int(self.snapshot["serverTime"]),
+                    float(self.snapshot["rmsDbL"]),
+                    float(self.snapshot["rmsDbR"]),
+                ]
+            )
             self.last_error = ""
             self.condition.notify_all()
 
@@ -78,6 +90,21 @@ class LevelState:
         with self.condition:
             return dict(self.snapshot)
 
+    def reset_history(self) -> None:
+        with self.condition:
+            self.history.clear()
+
+    def history_payload(self) -> dict[str, Any]:
+        with self.condition:
+            return {
+                "generatedAt": int(time.time() * 1000),
+                "online": bool(self.snapshot["online"]),
+                "updatesPerSecond": UPDATES_PER_SECOND,
+                "bufferSeconds": BUFFER_SECONDS,
+                "historySeconds": HISTORY_SECONDS,
+                "items": list(self.history),
+            }
+
     def health(self) -> dict[str, Any]:
         with self.condition:
             age_ms = int(time.time() * 1000) - int(self.snapshot["serverTime"])
@@ -92,6 +119,8 @@ class LevelState:
                 "bufferSeconds": BUFFER_SECONDS,
                 "analysisFrames": ANALYSIS_FRAMES,
                 "queueDepth": len(DELAY_QUEUE),
+                "historySeconds": HISTORY_SECONDS,
+                "historyDepth": len(self.history),
             }
 
 
@@ -210,6 +239,7 @@ def analyser_loop() -> None:
             )
             STATE.ffmpeg_pid = process.pid
             DELAY_QUEUE.clear()
+            STATE.reset_history()
             next_tick = time.monotonic()
 
             if process.stdout is None:
@@ -279,6 +309,10 @@ class VuRequestHandler(BaseHTTPRequestHandler):
             self.send_json(STATE.current())
             return
 
+        if path == "/history":
+            self.send_json(STATE.history_payload())
+            return
+
         if path != "/events":
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
@@ -338,7 +372,7 @@ def main() -> None:
     print(
         f"Radio Crash VU listening on http://{LISTEN_HOST}:{LISTEN_PORT}; "
         f"source={STREAM_URL}; updates={UPDATES_PER_SECOND}/s; "
-        f"analysisFrames={ANALYSIS_FRAMES or 'full'}",
+        f"analysisFrames={ANALYSIS_FRAMES or 'full'}; history={HISTORY_SECONDS}s",
         flush=True,
     )
 

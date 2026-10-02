@@ -54,9 +54,10 @@ A dedicated `rc-vu.service` runs on the streaming host:
 1. One FFmpeg process reads the existing local stream at `http://127.0.0.1:8000/live.mp3`.
 2. FFmpeg decodes it to 44.1 kHz stereo `pcm_s16le`.
 3. The Python service calculates true L/R RMS and peak values.
-4. Measurements are delayed by a fixed queue to approximate Safari's audible playback buffer.
+4. Measurements receive sequence numbers and timestamps, pass through a 1.10-second base queue and are retained in a 30-second numeric history.
 5. Nginx exposes compact numeric events at `https://live.radiocrash.net/vu/events`.
-6. Safari converts the reported dBFS RMS values with the same `10^(dBFS/20) × 24` mapping used by the local browser analyser.
+6. Nginx exposes the recent history at `https://live.radiocrash.net/vu/history`.
+7. Safari measures its current media buffer, selects the matching timestamped sample and converts dBFS RMS with the same `10^(dBFS/20) × 24` mapping used by the local analyser.
 
 The service does not record audio, write audio to disk or proxy audio to website visitors. Safari's browser receives only small JSON level messages.
 
@@ -121,6 +122,24 @@ Immediately after activation:
 - `lastError` remained empty;
 - the final side-by-side Safari and Chrome comparison was judged visually equivalent.
 
+### v4.0 adaptive Safari synchronization
+
+Testing from a different network on 2 October 2026 showed that Safari's player buffer was not fixed. The live media element exposed approximately 7–9 seconds through `buffered.end(last) − currentTime`, while the numeric feed still used the former fixed 1.10-second total alignment. The levels were real, but they represented a different point in the program and therefore appeared unrelated to the audible music.
+
+v4 retained the responsive 120 Hz server feed and added:
+
+- a 30-second in-memory history of compact `[seq, serverTime, rmsDbL, rmsDbR]` entries;
+- a public read-only `/vu/history` route;
+- direct measurement of Safari's current buffered-ahead duration every 200 ms;
+- a median of the latest nine readings to reject short jitter;
+- `extraDelay = max(0, bufferAhead − serverBaseDelay)`;
+- nearest-timestamp selection from history for every incoming SSE event;
+- a two-second history retry while preserving the real live-feed fallback.
+
+The embedded server timestamps drive sequence playback even when TCP groups multiple SSE packets. No fake animation, secondary browser audio element or additional `play()` call was introduced.
+
+The isolated final harness completed five Stop/Play cycles with a 7.0-second mock player buffer, a calculated 5.9-second additional delay, populated history and `server-adaptive` mode in every cycle. A separate test using the real Radio Crash stream measured changing buffers around 7.6–8.0 seconds and additional delays around 6.5–6.9 seconds. After production deployment, the public endpoint contained 3,600 samples spanning 29.992 seconds and the live Safari page showed independently changing L/R values.
+
 ## Lifecycle regression test
 
 The isolated Safari harness completed five consecutive Stop/Play cycles with:
@@ -137,22 +156,24 @@ The harness deliberately mocks the existing player lifecycle and consumes the re
 ## Final production baseline
 
 ```text
-client:            hybrid real VU v3.5 time-normalized decay
+client:            hybrid real VU v4.0 adaptive sync
 server rate:       120 measurements/s
 analysis window:   latest 256 stereo frames
-alignment buffer:  1.10 seconds / 132 measurements
+server base delay: 1.10 seconds / 132 measurements
+numeric history:   30 seconds / 3,600 measurements
 gain:              24
 LEDs:              18 per channel
-Safari rendering:  direct on each SSE level event
+Safari rendering:  timestamp-selected history sample per SSE event
 mobile:            disabled at 900 px and below
 ```
 
 ## Known limitations
 
-- Safari's numeric VU and audible audio use different timing paths.
-- The fixed 1.10-second queue can only approximate Safari's private, variable playback buffer.
+- Safari's numeric VU and audible audio still use different network connections.
+- Alignment depends on Safari exposing a valid buffered range; until it does, v4 temporarily uses the real live feed.
+- The nine-reading median deliberately trades a short settling period for resistance to buffer jitter.
 - Safari may render page updates below the display's maximum refresh rate.
-- Network jitter can cause small temporary visual offsets.
+- materially different latency between the audio and SSE connections can cause small temporary visual offsets.
 - A browser update may change either the Web Audio limitation or Safari's buffering behavior, so major Safari releases should be retested.
 
-These limitations do not make the meter fake: every displayed value is calculated from the real stereo program. They explain only why exact sample-level alignment cannot be guaranteed.
+These limitations do not make the meter fake: every displayed value is calculated from the real stereo program. v4 materially improves alignment but does not claim speaker-output sample accuracy.

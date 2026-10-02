@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Radio Crash live adaptive Safari VU test</title>
+  <link rel="stylesheet" href="/candidate.css">
+  <style>
+    body { margin: 32px; background: #141414; color: #eee; font: 16px/1.5 system-ui, sans-serif; }
+    button { padding: 10px 18px; font-weight: 700; }
+    pre { max-width: 900px; padding: 16px; background: #222; white-space: pre-wrap; }
+    #rc-vu-mini { position: static !important; margin-top: 24px; }
+    #rcnp-top-badge, #qwPlayerAuthor { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>Radio Crash — real stream / adaptive Safari VU</h1>
+  <p>This uses one real Radio Crash audio element and the isolated v4 candidate backend.</p>
+  <div id="QWplayerbar">
+    <button id="qwPlayerPlay" data-state="stop" type="button">PLAY / STOP</button>
+  </div>
+  <audio id="liveAudio" preload="none" src="https://live.radiocrash.net/;stream/1#.mp3"></audio>
+  <pre id="status">Press PLAY once.</pre>
+
+  <script>
+    (function () {
+      const audio = document.getElementById("liveAudio");
+      const sound = {
+        id: "currentSound",
+        _a: audio,
+        playState: 0,
+        paused: false,
+        unload: function () {
+          audio.pause();
+          audio.load();
+          this.playState = 0;
+          this.paused = false;
+        }
+      };
+      window.soundManager = {
+        sounds: { currentSound: sound },
+        createSound: function () { return sound; }
+      };
+
+      audio.addEventListener("play", function () { sound.playState = 1; sound.paused = false; });
+      audio.addEventListener("pause", function () { sound.paused = true; });
+      document.getElementById("qwPlayerPlay").addEventListener("click", function () {
+        if (this.dataset.state === "play") {
+          this.dataset.state = "stop";
+          audio.pause();
+        } else {
+          this.dataset.state = "play";
+          audio.play().catch(function (error) {
+            document.getElementById("status").textContent = "Playback failed: " + error;
+          });
+        }
+      });
+    })();
+  </script>
+  <script src="/candidate.js"></script>
+  <script>
+    setInterval(function () {
+      const audio = document.getElementById("liveAudio");
+      const runtime = window.RC_VU_HYBRID_RUNTIME;
+      const debug = runtime && runtime.debugState ? runtime.debugState() : {};
+      const vu = document.getElementById("rc-vu-mini");
+      document.getElementById("status").textContent = [
+        "mode=" + (vu ? vu.dataset.mode : "missing"),
+        "paused=" + audio.paused,
+        "readyState=" + audio.readyState,
+        "currentTime=" + Number(audio.currentTime || 0).toFixed(3),
+        "bufferAhead=" + (debug.bufferAheadSeconds == null ? "n/a" : debug.bufferAheadSeconds.toFixed(3)),
+        "serverBaseDelay=" + Number(debug.serverBufferSeconds || 0).toFixed(3),
+        "adaptiveExtraDelay=" + Number(debug.extraDelaySeconds || 0).toFixed(3),
+        "historySamples=" + (debug.serverSamples || 0),
+        "selectedSeq=" + (debug.selectedServerSeq || 0),
+        "SSE events / adaptive renders=" + (debug.serverLevelEvents || 0) + " / " + (debug.adaptiveRenders || 0),
+        "LED L/R=" + (debug.renderedL || 0) + " / " + (debug.renderedR || 0)
+      ].join("\n");
+    }, 250);
+  </script>
+</body>
+</html>

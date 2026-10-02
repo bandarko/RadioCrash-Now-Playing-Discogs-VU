@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Radio Crash Safari Buffer Diagnostic</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 820px; margin: 40px auto; padding: 0 20px; }
+    audio { width: 100%; margin: 16px 0; }
+    pre { background: #111; color: #8f8; padding: 18px; border-radius: 8px; min-height: 16em; overflow: auto; }
+    .note { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Radio Crash Safari buffer diagnostic</h1>
+  <p>Press Play once. This page does not create a Web Audio graph; it only reads playback timing exposed by the existing HTML audio element.</p>
+  <audio id="audio" controls preload="none" src="https://live.radiocrash.net/live.mp3"></audio>
+  <p class="note">The useful value is <code>bufferAhead</code>. If Safari reports it consistently, the production VU can delay numeric levels dynamically instead of relying on a fixed 1.10-second server queue.</p>
+  <pre id="output">Waiting for Play…</pre>
+  <script>
+    const audio = document.getElementById("audio");
+    const output = document.getElementById("output");
+    const startedAt = performance.now();
+
+    function ranges(value) {
+      const result = [];
+      for (let index = 0; index < value.length; index += 1) {
+        result.push([value.start(index), value.end(index)]);
+      }
+      return result;
+    }
+
+    function latestEnd(value) {
+      return value.length ? value.end(value.length - 1) : null;
+    }
+
+    function finite(value) {
+      return Number.isFinite(value) ? Number(value.toFixed(3)) : null;
+    }
+
+    function render() {
+      const bufferedEnd = latestEnd(audio.buffered);
+      const seekableEnd = latestEnd(audio.seekable);
+      const state = {
+        elapsed: finite((performance.now() - startedAt) / 1000),
+        paused: audio.paused,
+        readyState: audio.readyState,
+        networkState: audio.networkState,
+        currentTime: finite(audio.currentTime),
+        duration: finite(audio.duration),
+        buffered: ranges(audio.buffered).map(pair => pair.map(finite)),
+        seekable: ranges(audio.seekable).map(pair => pair.map(finite)),
+        bufferAhead: bufferedEnd === null ? null : finite(bufferedEnd - audio.currentTime),
+        seekableAhead: seekableEnd === null ? null : finite(seekableEnd - audio.currentTime)
+      };
+      output.textContent = JSON.stringify(state, null, 2);
+      document.title = state.bufferAhead === null
+        ? "RC buffer: unavailable"
+        : `RC buffer: ${state.bufferAhead.toFixed(3)} s`;
+    }
+
+    setInterval(render, 100);
+    render();
+  </script>
+</body>
+</html>

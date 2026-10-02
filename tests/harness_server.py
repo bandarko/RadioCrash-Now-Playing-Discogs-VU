@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import http.client
+import os
 import pathlib
 import ssl
+import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -13,6 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
 PORT = 8766
+UPSTREAM = urllib.parse.urlsplit(
+    os.environ.get("RC_VU_HARNESS_UPSTREAM", "https://live.radiocrash.net")
+)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -34,6 +39,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(body, "text/html; charset=utf-8")
             return
 
+        if path == "/tests/safari-live-vu-harness.html":
+            body = (ROOT / "tests/safari-live-vu-harness.html").read_bytes()
+            self.send_bytes(body, "text/html; charset=utf-8")
+            return
+
         if path == "/candidate.css":
             body = (ROOT / "now-playing-discogs-vu.css").read_bytes()
             self.send_bytes(body, "text/css; charset=utf-8")
@@ -45,6 +55,10 @@ class Handler(BaseHTTPRequestHandler):
                 'https://live.radiocrash.net/vu/events',
                 f'http://{HOST}:{PORT}/vu/events',
             )
+            source = source.replace(
+                'https://live.radiocrash.net/vu/history',
+                f'http://{HOST}:{PORT}/vu/history',
+            )
             self.send_bytes(source.encode(), "text/javascript; charset=utf-8")
             return
 
@@ -52,17 +66,18 @@ class Handler(BaseHTTPRequestHandler):
             self.proxy_events()
             return
 
+        if path == "/vu/history":
+            self.proxy_history()
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def proxy_events(self) -> None:
-        tls = ssl.create_default_context(cafile="/etc/ssl/cert.pem")
-        upstream = http.client.HTTPSConnection(
-            "live.radiocrash.net", timeout=30, context=tls
-        )
+        upstream = self.upstream_connection(timeout=30)
         try:
             upstream.request(
                 "GET",
-                "/vu/events",
+                "/events" if UPSTREAM.port == 8770 else "/vu/events",
                 headers={
                     "Accept": "text/event-stream",
                     "Origin": "https://radiocrash.net",
@@ -93,6 +108,37 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             upstream.close()
+
+    def proxy_history(self) -> None:
+        upstream = self.upstream_connection(timeout=10)
+        try:
+            upstream.request(
+                "GET",
+                "/history" if UPSTREAM.port == 8770 else "/vu/history",
+                headers={
+                    "Accept": "application/json",
+                    "Origin": "https://radiocrash.net",
+                    "User-Agent": "RadioCrash-VU-Safari-Harness/1.0",
+                },
+            )
+            response = upstream.getresponse()
+            body = response.read()
+            if response.status != HTTPStatus.OK:
+                self.send_error(response.status)
+                return
+            self.send_bytes(body, "application/json; charset=utf-8")
+        finally:
+            upstream.close()
+
+    @staticmethod
+    def upstream_connection(timeout: int) -> http.client.HTTPConnection:
+        host = UPSTREAM.hostname or "live.radiocrash.net"
+        if UPSTREAM.scheme == "https":
+            tls = ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+            return http.client.HTTPSConnection(
+                host, port=UPSTREAM.port, timeout=timeout, context=tls
+            )
+        return http.client.HTTPConnection(host, port=UPSTREAM.port, timeout=timeout)
 
     def log_message(self, format_string: str, *args: object) -> None:
         print("[harness] " + format_string % args, flush=True)
