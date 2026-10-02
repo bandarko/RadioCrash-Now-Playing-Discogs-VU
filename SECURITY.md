@@ -37,11 +37,8 @@ The browser calls `/wp-json/rc/v1/discogs`. The WordPress proxy reads `RC_DISCOG
 ## Deployment safety
 
 - Review diffs before copying complete frontend files into WordPress.
-- Run server scripts from the documented staging directory.
-- Use the guarded scripts rather than editing the active systemd unit or Nginx configuration in place.
-- Validate Nginx with `nginx -t` before reload.
-- Restart only `rc-vu.service` for VU-only changes.
-- Keep the SSE endpoint numeric-only; never use it to proxy audio.
+- Treat `server-vu/` as archived source, not a production deployment target.
+- The retired `rc-vu.service` must remain absent from production unless the architecture is deliberately re-approved.
 - Preserve the browser's “existing player only” rule.
 
 ## Supported production baseline
@@ -49,10 +46,9 @@ The browser calls `/wp-json/rc/v1/discogs`. The WordPress proxy reads `RC_DISCOG
 Security and operational documentation follows the current production baseline on the `main` branch:
 
 ```text
-client:            hybrid real VU v3.5 time-normalized decay
-server rate:       120 measurements/s
-analysis window:   latest 256 stereo frames
-alignment buffer:  1.10 seconds
+client:            local real VU + Safari visual fallback v5.0
+Safari server VU:  retired; no public /vu/ routes
+browser audio:     existing player only
 ```
 
 Historical or experimental branches may not receive fixes.

@@ -1,196 +1,64 @@
-# Why Safari needs a server-side VU feed
+# Why Safari uses a visual VU fallback
 
-Last verified: 2 October 2026
-
-Active implementation: `hybrid real VU v4.0 adaptive sync`
+Last updated: 2 October 2026.
+Current implementation: `local real VU + Safari visual fallback v5.0`
 
 ## Short answer
 
-Chrome, Firefox and Brave allow Web Audio to analyse decoded samples from the same `HTMLAudioElement` the listener hears. Their VU meter can therefore measure audio on the player's local media clock.
+Chrome, Firefox and Brave can expose decoded samples from the existing Radio Crash player to Web Audio. Their VU meter therefore measures the exact audio element the listener hears.
 
-In the tested Safari/WebKit path, the Radio Crash continuous Shoutcast/Icecast stream plays normally but `MediaElementAudioSourceNode` does not expose usable samples to `AnalyserNode`. Both byte and floating-point analyser reads return silence.
+In the tested Safari/WebKit configuration, the continuous cross-origin Icecast/Shoutcast stream plays normally but Web Audio returns silence. Safari cannot produce a real browser-local VU from that player. A server analyser can measure the real broadcast, but it cannot know Safari's changing playback-buffer position accurately enough to guarantee that the displayed sample is the sample currently heard. The stable production choice is a visual fallback in Safari.
 
-Safari therefore uses one shared FFmpeg analyser on the streaming server. It calculates real stereo levels from the same program source and sends only compact numeric L/R values to Safari through Server-Sent Events (SSE). The browser still has exactly one audible audio player and one audio stream.
-
-## Normal path in Chrome, Firefox and Brave
+## Real local path in Chrome, Firefox and Brave
 
 ```text
-existing SoundManager2 player
-        │
-        └─ HTMLAudioElement heard by the listener
-               │
-               └─ MediaElementAudioSourceNode
-                      │
-                      └─ ChannelSplitterNode
-                           ├─ left AnalyserNode
-                           └─ right AnalyserNode
-                                  │
-                                  └─ RMS → gain 24 → 18 LED segments
+existing SoundManager2 HTMLAudioElement
+        └─ MediaElementAudioSourceNode
+              └─ ChannelSplitterNode
+                    ├─ left AnalyserNode
+                    └─ right AnalyserNode
+                          └─ RMS → gain → 18 LED segments
 ```
 
-`createMediaElementSource()` attaches the Web Audio graph to the existing player. The code does not create another `Audio` object, replace the stream URL or call `play()` on a second element.
+The analyser and speakers share one media element and one playback clock. No second player or audio request is required.
 
-The local path uses:
+## What was verified in Safari
 
-- `fftSize = 256`;
-- separate left and right channels;
-- time-domain RMS;
-- gain `24`;
-- immediate attack and elapsed-time-normalized decay;
-- `requestAnimationFrame` for reading and rendering the local analyser.
+- The media element played and its current time advanced.
+- `AudioContext` entered the running state and the graph could be created.
+- Byte and floating-point analyser reads returned silence for the continuous stream.
+- The same analyser, channel split, RMS calculation and LEDs worked with finite media.
+- Correct CORS setup, a same-origin proxy and alternate MIME headers did not restore live-stream samples.
 
-Because the analyser and audible signal share one player and one media clock, browser buffering is already reflected in the samples being measured.
+This is consistent with long-standing WebKit limitations around routing some streaming media through `MediaElementAudioSourceNode`. The practical distinction is important: successful playback does not guarantee that JavaScript receives PCM samples.
 
-## What happens in Safari
+## Why the server-side real-level attempt was retired
 
-The following was confirmed in Safari:
+The experiment ran one shared FFmpeg decoder on the streaming host and sent numeric timestamped L/R levels to Safari. It did not create a second browser audio stream, and the measurements themselves were real.
 
-- the `HTMLAudioElement` plays and its current time advances;
-- `AudioContext.state` is `running`;
-- the Web Audio graph can be constructed;
-- `getByteTimeDomainData()` and `getFloatTimeDomainData()` return silence for the continuous stream;
-- the same analyser, RMS and LED code works with a finite WAV file.
-
-The practical result is playback without usable PCM samples in JavaScript.
-
-This matches [WebKit bug 180696](https://bugs.webkit.org/show_bug.cgi?id=180696), reported for HLS and other streaming protocols including Icecast. The issue describes streams that play while Web Audio effects or analysis do not receive the media signal. Its status remained `NEW` when checked on 26 September 2026.
-
-The [Web Audio specification for `MediaElementAudioSourceNode`](https://webaudio.github.io/web-audio-api/#MediaElementAudioSourceNode) defines media-element audio as the node's source. It also requires silence for cross-origin media that is not CORS-enabled. The Radio Crash failure was not treated as a simple CORS mistake because correct CORS headers, a same-origin proxy and alternate MIME types were all tested without restoring analyser data.
-
-## Evidence that the application code was not the cause
-
-| Safari test | Playback | Analyser result |
-| --- | --- | --- |
-| Radio Crash stream directly | works | silence only |
-| Same stream through a same-origin proxy as `audio/aacp` | works | silence only |
-| Same stream through the proxy as `audio/mpeg` | works | silence only |
-| Locally generated continuous MP3 stream | works | silence only |
-| Finite stereo WAV file | works | real values |
-
-The investigation also verified:
-
-- `crossOrigin="anonymous"` was assigned before `src`;
-- the stream sent a matching `Access-Control-Allow-Origin` header;
-- both byte and float analyser APIs were tested;
-- the analyser was placed in the required audio signal path;
-- L/R splitting, RMS calculation, gain and LEDs worked with finite media;
-- changing the MIME header did not fix live-stream analysis.
-
-This ruled out the LED renderer, RMS calculation, channel selection, CSS, startup order and ordinary CORS configuration as the primary cause.
-
-## Selected Safari architecture
+However, there were two independent timelines:
 
 ```text
-                           ┌─ Chrome / Firefox / Brave
-Shoutcast live.mp3 ────────┤  existing browser player → local Web Audio VU
-                           │
-                           └─ streaming host
-                                └─ one shared FFmpeg decoder
-                                     └─ PCM L/R RMS + peak
-                                          └─ 1.10 s level queue
-                                               ├─ numeric SSE events
-                                               └─ 30 s numeric history
-                                                    └─ Safari buffer measurement
-                                                         └─ timestamp selection → LED VU
-
-Safari audio: existing browser player → speakers
-Safari VU:    numeric SSE data → LED display
+server analyser clock ── numeric level timestamp
+Safari player clock   ── network + decoder + changing media buffer ── speakers
 ```
 
-`rc-vu.service` opens one local connection to `http://127.0.0.1:8000/live.mp3`. FFmpeg decodes 44.1 kHz stereo `pcm_s16le`; the Python service calculates:
+Safari's live buffer varied by connection, location, startup and repeated playback. The browser's reported buffered range was not a sufficiently stable mapping to the exact audible sample. Fixed delays, higher update rates, short analysis windows and a 30-second history improved the appearance in individual tests but could not guarantee synchronization. A fast, accurate measurement of the wrong point in time is still a misleading VU display.
 
-- `rmsDbL` and `rmsDbR`;
-- `peakDbL` and `peakDbR`;
-- 120 measurements/s;
-- the latest 256 stereo frames per measurement;
-- a 1.10-second queue containing 132 measurements.
-- a 30-second rolling history containing 3,600 compact RMS entries.
+The server path also added an FFmpeg process, a Python service, memory history, SSE clients, Nginx routes and operational complexity for a result that was not reliably tied to the listener's audio. It was removed from production on 2 October 2026.
 
-Nginx exposes only:
+## Current Safari behavior
 
-- `https://live.radiocrash.net/vu/events` — numeric SSE levels;
-- `https://live.radiocrash.net/vu/history` — recent timestamped numeric RMS history;
-- `https://live.radiocrash.net/vu/status` — service health and configuration.
+Safari uses a lightweight correlated stereo animation:
 
-The service does not record audio, store it on disk or send audio to website visitors.
+- it starts only after the existing media element emits `playing`;
+- it stops and clears immediately when playback stops or ends;
+- it has shared L/R movement with small channel differences and occasional peaks;
+- attack and decay use elapsed time, so display refresh rate does not determine the speed;
+- it creates no `Audio` object, makes no `/vu/` request and starts no second stream.
 
-## Why this is not a second Safari audio stream
+This fallback is deliberately described as visual, not as a real measurement. It is preferable to presenting unsynchronized real server measurements as though they were the listener's current audio.
 
-The two connections have different purposes:
+## When Safari can return to a real VU
 
-- the existing SoundManager2 `HTMLAudioElement` is the only browser connection that downloads and plays audio;
-- `EventSource` downloads small text messages containing L/R numbers;
-- the Safari branch contains no `new Audio()`, secondary audio `src` or second `play()` call;
-- all Safari visitors share one server-side FFmpeg process instead of each visitor opening a second audio download.
-
-This avoids duplicate sound, duplicate stream bandwidth and two independent players drifting apart.
-
-## Timing and visual response
-
-Chrome's analyser and its audible audio share the same local media clock. Safari uses two timing paths:
-
-1. the browser buffers and plays the audio stream;
-2. the server analyses the program near its source, applies a 1.10-second base delay and sends timestamped numeric levels over SSE.
-
-Safari, the network and SoundManager can change playback buffering dynamically. On 2 October 2026 the tested Safari player held roughly 7–9 seconds of buffered audio on an FTTH connection, which explained why a fixed 1.10-second meter could show real but visibly unrelated levels.
-
-v4 reads the media element's exposed `buffered` range and calculates `buffered.end − currentTime` every 200 ms. It keeps the median of the latest nine valid readings, subtracts the 1.10-second server base delay and selects the nearest timestamped L/R sample from `/vu/history`. This makes the visual delay follow the actual player buffer instead of the listener's location or connection speed.
-
-The embedded server timestamps, rather than local SSE arrival times, drive sample selection. TCP may deliver several SSE packets together; using their original timestamps preserves the 120 Hz measurement sequence. If the history request fails, Safari temporarily displays the real live feed and retries after two seconds. It never falls back to random animation.
-
-The final response matching required two additional choices:
-
-- decay is expressed as 36 LED segments/s instead of a fixed amount per browser frame;
-- the server publishes 120 measurements/s so it captures short peaks at the same cadence as the tested Chrome/Brave analyser on a ProMotion display.
-
-The real-stream v4 test measured changing buffers around 7.6–8.0 seconds and automatically selected additional delays around 6.5–6.9 seconds. Small temporary differences can still occur while the nine-reading median settles, if Safari reduces page rendering frequency or if the audio and SSE connections experience materially different network delay.
-
-## Safari player lifecycle
-
-The SSE connection opens only after the existing player emits `playing`. This prevents the VU from moving while Safari is still filling its initial audio buffer.
-
-On Stop, the client:
-
-1. closes `EventSource`;
-2. resets both LED channels to zero;
-3. calls `unload()` on the existing SoundManager sound.
-
-The unload is necessary because the theme otherwise pauses an infinite AAC stream and may later resume stale compressed data. Repeated reuse caused skipping, digital artifacts or silence. The next Play creates a fresh network connection on the same SoundManager player object; it does not create another player.
-
-## Rejected alternatives
-
-### Fake animation
-
-A fake meter does not represent the music or stereo image. It was used only as a temporary early fallback and is not part of the production solution.
-
-### A second audio element for analysis
-
-A second element could create duplicate sound and stream traffic. Independent players would also drift and would not provide reliable synchronization. The project therefore enforces an “existing player only” rule.
-
-### Same-origin proxy or MIME-only changes
-
-Both were tested. Playback continued to work, but Safari's analyser still returned silence.
-
-### Safari rendering through `requestAnimationFrame`
-
-The experimental v3.4 client stored the newest SSE level and rendered it on Safari's animation frame. It passed the isolated lifecycle test but looked slower on the production page. v3.5 restored direct SSE rendering. v4 keeps that responsive renderer but selects the correctly delayed historic measurement for each timestamped event.
-
-## When to reconsider local Web Audio in Safari
-
-Keep the server-side path until a new Safari/WebKit release passes all of these checks on the real Radio Crash stream:
-
-1. byte or float analyser data contains real, non-zero samples;
-2. left and right channels remain separate;
-3. playback and analysis use only the existing player;
-4. the Network panel shows no second audio request;
-5. at least five Stop/Play cycles complete without skipping, artifacts or silence;
-6. behavior is confirmed on the production page, not only with a finite audio file.
-
-If all checks pass, Safari can return to the same local analyser path as Chrome and the server-side adaptive alignment can be removed.
-
-## Related documentation
-
-- [Safari investigation and validation report](SAFARI-TEST-REPORT.md)
-- [Operations guide](VU-OPERATIONS.md)
-- [WordPress deployment](WORDPRESS-COPY-PASTE.md)
-- [Server installation and maintenance](../server-vu/README.md)
+Retest after a meaningful WebKit update. Safari may use the normal local path only when the production live stream produces non-zero, independently changing L/R analyser data from the same existing audio element, through repeated Stop/Start cycles, without a proxy or second stream. At that point the Safari browser detection can be removed and the common local analyser used everywhere.

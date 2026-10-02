@@ -1,218 +1,68 @@
-# RadioCrash — Now Playing + Discogs + real stereo VU
+# Radio Crash — Now Playing, Discogs and stereo VU
 
-Production WordPress frontend and server-side Safari VU feed used by **Radio Crash**.
+Production WordPress frontend used by **Radio Crash**. It provides the current-song display, Discogs artwork and an 18-segment stereo VU meter without creating a second browser audio stream.
 
-The repository contains one integrated system:
+## Current production design
 
-- current-song display and cover artwork;
-- Discogs metadata through the Radio Crash WordPress proxy;
-- an 18-segment stereo VU meter;
-- the Safari/WebKit numeric level service;
-- deployment, rollback and test documentation.
+Last updated: 2 October 2026.
 
-The design has one non-negotiable rule: the browser must use the existing player only. A visualizer must never start a second audio download or a second playback path.
-
-## Current production state
-
-Verified on 2 October 2026:
-
-| Component | Current version / configuration |
+| Browser | VU implementation |
 | --- | --- |
-| WordPress JavaScript | `hybrid real VU v4.0 adaptive sync` |
-| WordPress CSS | documented production styling |
-| Chrome / Firefox / Brave | local Web Audio analyser, `fftSize=256` |
-| Safari | real numeric stereo levels with adaptive buffer synchronization |
-| Server update rate | 120 measurements per second |
-| Server analysis window | latest 256 stereo frames |
-| Server base delay | 1.10 seconds (132 measurements) |
-| Server history | 30 seconds (3,600 measurements) |
-| VU layout | 18 LED segments per channel; disabled at 900 px and below |
+| Chrome, Firefox, Brave | Real L/R levels from Web Audio attached to the existing SoundManager2 player |
+| Safari | Lightweight visual fallback, active only while the existing player is actually playing |
+| Mobile / viewport at or below 900 px | VU is not initialized |
 
-Version v4 measures Safari's current `buffered.end − currentTime`, smooths that value and selects the matching real L/R sample from a 30-second server history. It therefore follows changes in Safari's playback buffer instead of relying on one fixed, manually calibrated delay. The 120 Hz direct-event renderer and time-normalized decay from v3.5 remain in place.
+The JavaScript version is `local real VU + Safari visual fallback v5.0`.
 
-## Documentation
+The Safari fallback is intentional. Safari plays the Radio Crash continuous cross-origin live stream but, in the tested configuration, its `MediaElementAudioSourceNode` exposes silence to `AnalyserNode`. A server-side real-level experiment was built and tested, but Safari's variable playback buffer meant that the server analyser and the listener's audible player did not share a reliable clock. The result could be real program levels yet still appear late or unrelated to the sound. That experiment was retired on 2 October 2026.
 
-| Document | Purpose |
-| --- | --- |
-| [Why Safari needs a server-side VU feed](docs/WHY-SAFARI-NEEDS-SERVER-VU.md) | WebKit limitation, tested alternatives, architecture and timing trade-offs |
-| [Safari investigation and validation report](docs/SAFARI-TEST-REPORT.md) | Reproducible evidence, version history, calibration and final measurements |
-| [VU operations guide](docs/VU-OPERATIONS.md) | Health checks, deployment, tuning, rollback and troubleshooting |
-| [WordPress deployment](docs/WORDPRESS-COPY-PASTE.md) | Exact records, complete-file replacement and browser acceptance checklist |
-| [Server service guide](server-vu/README.md) | First installation, systemd/Nginx layout and recovery scripts |
-| [Production source policy](SOURCE-INTEGRITY.md) | Source-of-truth and secret-handling rules |
-| [Security policy](SECURITY.md) | Private reporting guidance and public-repository safety |
-
-## Quick production check
-
-```bash
-curl -fsS https://live.radiocrash.net/vu/status
-```
-
-The response should contain these invariant values:
-
-```json
-{"online":true,"updatesPerSecond":120,"bufferSeconds":1.1,"analysisFrames":256,"queueDepth":132,"historySeconds":30.0,"historyDepth":3600,"lastError":""}
-```
-
-Live levels, sequence numbers, timestamps, client count, process ID and `ageMs` are expected to vary.
-
-## Architecture
-
-### Chrome, Firefox and Brave
-
-The VU connects `AnalyserNode` objects to the `HTMLAudioElement` already owned by the Vice theme's SoundManager2 player. It does not create another player or request another audio stream.
-
-### Safari
-
-Safari/WebKit reproduces the live AAC stream but returns zeroes from the browser-side `MediaElementAudioSourceNode` analyser. The server therefore runs one FFmpeg decoder against the existing local Shoutcast stream and publishes only compact L/R RMS and peak numbers.
-
-This is a WebKit live-stream limitation, not a fake-VU design choice. The tested Safari path played the stream while both byte and float analyser data remained zero; the same VU graph worked with a finite WAV file. CORS headers, a same-origin proxy and alternate MIME headers did not change the live-stream result. See [`docs/WHY-SAFARI-NEEDS-SERVER-VU.md`](docs/WHY-SAFARI-NEEDS-SERVER-VU.md) for the full explanation, evidence and trade-offs.
-
-Safari opens:
-
-```text
-https://live.radiocrash.net/vu/events
-https://live.radiocrash.net/vu/history
-```
-
-only after the real player emits `playing`, and closes the SSE feed on Stop. The history endpoint is fetched once per playback start. Both endpoints contain numeric data, not audio.
-
-The server analyses the latest 256 stereo frames 120 times per second. The browser uses the same RMS-to-LED calculation and gain (`24`) as the local Chrome/Firefox/Brave implementation.
-
-Safari measures the buffered audio ahead of its current playback position every 200 ms. A nine-reading median rejects short buffer jitter. The client subtracts the server's 1.10-second base delay and selects the nearest timestamped measurement from the history. If history is temporarily unavailable, the meter continues with the real live SSE feed and retries automatically; it never substitutes fake movement.
-
-### Safari Stop/Start fix
-
-The Vice theme pauses its infinite AAC SoundManager stream on Stop. Replaying that stale paused object in Safari can produce skipping, digital artefacts or silence after repeated Stop/Start cycles.
-
-On Safari only, the current client calls `unload()` on the existing SoundManager sound after Stop. The next Play reloads a fresh live connection on the same player object. No additional `Audio` object or browser audio stream is created.
-
-## Repository structure
-
-```text
-.
-├── README.md
-├── SECURITY.md
-├── SOURCE-INTEGRITY.md
-├── discogs-proxy.php
-├── now-playing-discogs-vu.js
-├── now-playing-discogs-vu.css
-├── docs/
-│   ├── SAFARI-TEST-REPORT.md
-│   ├── VU-OPERATIONS.md
-│   ├── WHY-SAFARI-NEEDS-SERVER-VU.md
-│   └── WORDPRESS-COPY-PASTE.md
-├── server-vu/
-│   ├── README.md
-│   ├── deploy.sh
-│   ├── nginx-radiocrash-vu.conf
-│   ├── rc-vu.service
-│   ├── rc_vu_server.py
-│   ├── rollback.sh
-│   ├── tune-buffer.sh
-│   ├── tune-rate.sh
-│   ├── upgrade-v3-3.sh
-│   └── upgrade-v4-adaptive.sh
-└── tests/
-    ├── harness_server.py
-    ├── hybrid-vu-harness.html
-    ├── safari-buffer-diagnostic.html
-    └── safari-live-vu-harness.html
-```
+The current Safari animation is therefore honest about its role: it is visual activity, not an audio measurement. It never calls the retired `/vu/*` endpoints, creates an `Audio` object or starts another stream. See [Safari VU rationale](docs/WHY-SAFARI-NEEDS-SERVER-VU.md).
 
 ## WordPress deployment map
 
-| Repository file | WordPress admin location | Exact record title | State |
-| --- | --- | --- | --- |
-| `now-playing-discogs-vu.js` | Custom CSS & JS → All Custom Code | `JS 1 za Svira sada + Discogs + VU` | active |
-| `now-playing-discogs-vu.css` | Custom CSS & JS → All Custom Code | `CSS 1 za Svira sada + Discogs + logo lijevo + VU` | active |
-| `discogs-proxy.php` | Snippets → All Snippets | `Discogs` | active sanitized repository copy |
+| Repository file | WordPress location | Record title |
+| --- | --- | --- |
+| `now-playing-discogs-vu.js` | Custom CSS & JS → All Custom Code | `JS 1 za Svira sada + Discogs + VU` |
+| `now-playing-discogs-vu.css` | Custom CSS & JS → All Custom Code | `CSS 1 za Svira sada + Discogs + logo lijevo + VU` |
+| `discogs-proxy.php` | Snippets → All Snippets | `Discogs` |
 
-Replace the complete contents of the corresponding WordPress frontend record; do not combine partial versions. See [`docs/WORDPRESS-COPY-PASTE.md`](docs/WORDPRESS-COPY-PASTE.md).
+Replace the complete JavaScript or CSS record; do not mix fragments from different versions. Detailed steps are in [WordPress copy/paste deployment](docs/WORDPRESS-COPY-PASTE.md).
 
-## Server deployment
+## Important behavior
 
-The current production service runs as:
+- All desktop paths use the existing player only.
+- Chrome, Firefox and Brave analyse the player's decoded L/R samples locally.
+- Safari starts its visual fallback only after the real media element emits `playing` and clears it on Stop.
+- On Safari, Stop unloads the paused infinite AAC connection so the next Play starts a fresh connection on the same SoundManager object. This avoids stale-buffer skipping, clicks and silence after repeated Stop/Start cycles.
+- The meter has 18 segments per channel and is hidden at 900 px and below.
+- The browser calls Discogs only through `/wp-json/rc/v1/discogs`.
 
-```text
-/opt/radiocrash-vu/rc_vu_server.py
-/etc/systemd/system/rc-vu.service
-```
+## Testing
 
-Public endpoints:
-
-```text
-https://live.radiocrash.net/vu/status
-https://live.radiocrash.net/vu/events
-https://live.radiocrash.net/vu/history
-```
-
-The service is bound to `127.0.0.1:8767`; Nginx exposes only these three read-only VU routes.
-
-For an existing installation staged at `/home/banadmin/rc-vu-staging`:
-
-```bash
-sudo /home/banadmin/rc-vu-staging/upgrade-v4-adaptive.sh
-```
-
-The upgrade script:
-
-- validates the Python, systemd and Nginx sources;
-- backs up the installed program, service unit and Nginx snippet;
-- restarts only `rc-vu.service`;
-- validates and reloads Nginx without restarting it;
-- verifies 120 Hz, 1.10 seconds, 256-frame analysis and 30 seconds of history;
-- automatically restores the previous version if validation fails.
-
-It does not restart Shoutcast or the host. See [`server-vu/README.md`](server-vu/README.md) for first installation and rollback details.
-
-The 1.10-second queue is now a base server delay, not the complete Safari alignment. On 2 October 2026 Safari exposed roughly 7–9 seconds of buffered audio on the tested FTTH connection. v4 measured that value directly and selected the matching historic level sample, automatically changing the effective delay as the browser buffer changed.
-
-## Verified tests
-
-The final Safari 26.6.2 regression test on 2 October 2026 completed five consecutive Stop/Play cycles against the production backend:
-
-- five SSE connections;
-- 50 real stereo level messages;
-- five releases of the paused SoundManager stream;
-- a detected 7.0-second mock player buffer and calculated 5.9-second additional delay in every cycle;
-- a populated 3,600-sample history and active `server-adaptive` mode;
-- separate L/R LED values;
-- zero SSE errors;
-- 0/0 LEDs and a closed SSE connection after every Stop.
-
-The accepted production configuration runs at 120 updates/s. A separate real-stream Safari test measured changing browser buffers around 7.6–8.0 seconds and automatically calculated additional delays around 6.5–6.9 seconds. The live production page showed independently changing L/R values after deployment.
-
-The full Safari investigation and version history are in [`docs/SAFARI-TEST-REPORT.md`](docs/SAFARI-TEST-REPORT.md).
-
-To repeat the isolated Safari regression test locally:
+Run the local harness:
 
 ```bash
 python3 tests/harness_server.py
 ```
 
-Then open `http://127.0.0.1:8766/tests/hybrid-vu-harness.html?autorun=1` in Safari. A successful run reports `AUTO PASS — 5/5 Safari STOP/START cycles`. The harness uses a mock of the existing SoundManager player lifecycle and the real public numeric VU feed; it never starts a second browser audio stream.
+Open `http://127.0.0.1:8766/tests/hybrid-vu-harness.html?autorun=1` in Safari. A successful test reports `AUTO PASS — 5/5 Safari STOP/START cycles`, confirms that the animation advances, that Stop releases the stale stream exactly once, and that no server VU connection is opened.
 
-## Discogs proxy
+Also test the production page manually in Safari and one Chromium browser. Confirm one audible stream, clean repeated Stop/Start behavior, zero LEDs while stopped, real L/R motion in Chromium and no `/vu/` network requests in Safari.
 
-The browser calls `/wp-json/rc/v1/discogs`; it never calls `api.discogs.com` directly. The repository copy expects the credential through the `RC_DISCOGS_TOKEN` environment variable and deliberately excludes the production secret.
+## Repository layout
 
-The production `Discogs` snippet supplies cover and release data to the web frontend and mobile consumers. The separate `Android RC app last 10 songs` snippet supplies song history to the Android and iOS apps.
+- `now-playing-discogs-vu.js` — complete production JavaScript
+- `now-playing-discogs-vu.css` — complete production CSS
+- `docs/` — deployment, rationale, operations and test history
+- `tests/` — local Safari lifecycle harness and historical diagnostics
+- `server-vu/` — archived source from the retired server-side experiment plus its uninstall script; not deployed
 
-## Security and source policy
+## Retired server experiment
 
-- Never commit Discogs tokens, WordPress credentials, private keys, database dumps, backups or runtime caches.
-- Keep browser audio strictly “existing player only.”
-- Keep the server feed numeric-only; do not proxy audio through `/vu/events`.
-- Treat `now-playing-discogs-vu.js`, `now-playing-discogs-vu.css` and `server-vu/` as synchronized production sources.
-- Test Safari Stop/Start repeatedly before deploying player lifecycle changes.
+The production `rc-vu.service`, port `8767`, Nginx `/vu/` routes, `/opt/radiocrash-vu`, staging directory and VU backups were removed on 2 October 2026. Nginx and Icecast remained active. The shared `ffmpeg` package was intentionally retained because it is a normal system dependency and may be used elsewhere.
 
-The repository is public, but production credentials and infrastructure backups are not part of the project. The committed Discogs proxy reads `RC_DISCOGS_TOKEN` from the server environment; the browser never receives that token. The repository and its reachable Git history were checked for embedded passwords, access tokens and private-key material before this documentation update.
+The archived implementation remains in Git for engineering history and reproducibility. Do not deploy it as part of the current frontend.
 
-See [`SOURCE-INTEGRITY.md`](SOURCE-INTEGRITY.md) and [`SECURITY.md`](SECURITY.md).
+## Security
 
-## Radio Crash
-
-Independent internet radio project, online since 2011 with roots going back to 1986.
-
-**Website:** [radiocrash.net](https://radiocrash.net/)
+Never commit tokens, passwords, private keys, database dumps or server backups. The public repository copy of the Discogs proxy reads `RC_DISCOGS_TOKEN` from the environment; browser code never receives that token.

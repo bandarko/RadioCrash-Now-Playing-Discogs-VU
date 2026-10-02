@@ -14,8 +14,8 @@
   </style>
 </head>
 <body>
-  <h1>Radio Crash — hybrid Safari VU test</h1>
-  <p>Mock existing SoundManager player + real server-side L/R feed.</p>
+  <h1>Radio Crash — Safari fallback VU test</h1>
+  <p>Mock existing SoundManager player + visual fallback; no server VU connection.</p>
   <div id="QWplayerbar">
     <button id="qwPlayerPlay" data-state="stop" type="button">PLAY / STOP</button>
   </div>
@@ -166,13 +166,11 @@
           const lit = document.querySelectorAll("#rc-vu-mini .rc-vu-led.on").length;
 
           if (!beforeStop.active || !beforeStop.safariPlaybackReady) fail("VU is not active after playing");
-          if (window.__rcHarnessEvents.level <= levelsBefore) fail("no new SSE level events");
-          if ((beforeStop.serverLevelEvents || 0) <= processedBefore) fail("SSE levels were not processed");
-          if ((beforeStop.historyLoads || 0) <= (debugBefore.historyLoads || 0)) fail("history was not loaded");
-          if ((beforeStop.serverSamples || 0) < 100) fail("history did not populate the sample queue");
-          if (Math.abs((beforeStop.bufferAheadSeconds || 0) - 7) > 0.1) fail("7-second player buffer was not detected");
-          if (Math.abs((beforeStop.extraDelaySeconds || 0) - 5.9) > 0.1) fail("adaptive delay was not calculated");
-          if (document.getElementById("rc-vu-mini").dataset.mode !== "server-adaptive") fail("adaptive mode was not active");
+          if (window.__rcHarnessEvents.level !== levelsBefore) fail("Safari fallback opened the server feed");
+          if ((beforeStop.serverLevelEvents || 0) !== processedBefore) fail("Safari fallback processed server levels");
+          if ((beforeStop.fakeFrames || 0) <= (debugBefore.fakeFrames || 0)) fail("fake animation did not advance");
+          if ((beforeStop.historyLoads || 0) !== (debugBefore.historyLoads || 0)) fail("Safari fallback loaded server history");
+          if (document.getElementById("rc-vu-mini").dataset.mode !== "safari-fake") fail("Safari fallback mode was not active");
           if (!lit) fail("LEDs did not illuminate");
 
           button.click();
@@ -191,9 +189,7 @@
               sseLevels: window.__rcHarnessEvents.level,
               renderedL: beforeStop.renderedL,
               renderedR: beforeStop.renderedR,
-              bufferAhead: beforeStop.bufferAheadSeconds,
-              extraDelay: beforeStop.extraDelaySeconds,
-              samples: beforeStop.serverSamples
+              fakeFrames: beforeStop.fakeFrames
             });
 
             if (result.cycle < totalCycles) {
@@ -204,16 +200,8 @@
           });
         }
 
-        window.__rcHarnessOnLevel = function () {
-          const currentDebug = runtime && runtime.debugState ? runtime.debugState() : {};
-          if (
-            window.__rcHarnessEvents.level - levelsBefore >= 10 &&
-            currentDebug.historyReady
-          ) {
-            queueMicrotask(finishPlayPhase);
-          }
-        };
         button.click();
+        setTimeout(finishPlayPhase, 300);
       }
 
       queueMicrotask(startCycle);

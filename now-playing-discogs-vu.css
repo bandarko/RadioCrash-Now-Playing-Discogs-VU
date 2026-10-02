@@ -3,8 +3,8 @@
  * WordPress: Custom CSS & JS → "CSS 1 za Svira sada + Discogs + logo lijevo + VU"
  * Copy/paste the complete file into the existing CSS record.
  *
- * Documentation version: 2026-09-24 — hybrid real VU v3
- * VU izgled ostaje isti: 18 LED segmenata, desktop prikaz i mobile hide do 900 px.
+ * Documentation version: 2026-10-02 — local real VU + Safari visual fallback v5.0
+ * The visual layout remains unchanged: 18 LED segments, desktop only, hidden at 900 px and below.
  */
 
 /* === RC • Top-right "Sada svira" badge + cover === */

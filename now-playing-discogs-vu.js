@@ -3,14 +3,14 @@
  * WordPress: Custom CSS & JS → "JS 1 za Svira sada + Discogs + VU"
  * Copy/paste the complete file into the existing JavaScript record.
  *
- * Version: 2026-09-26 — hybrid real VU v3.5 time-normalized decay
+ * Version: 2026-10-02 — real local VU + Safari visual fallback v5.0
  * - Now Playing and Discogs use the existing WordPress proxy.
  * - The VU has 18 LED segments per channel.
  * - Chrome/Firefox/Brave analyse only the existing SoundManager2 player.
- * - Safari receives numeric L/R levels from the server over SSE.
+ * - Safari uses a clearly documented visual fallback while the player runs.
  * - No second Audio(), stream URL or play()/pause() call is created.
  * - The VU is not initialized at viewport widths of 900 px and below.
- * - There is no fake/random fallback: LEDs remain at zero without a real signal.
+ * - The Safari fallback does not open another stream or claim audio accuracy.
  */
 
 (function () {
@@ -415,19 +415,17 @@
 })();
 
 
-/* === RC VU METER STEREO - HYBRID REAL VU v4.0 ADAPTIVE SYNC - 2.10.2026. ===
+/* === RC VU METER STEREO - LOCAL REAL + SAFARI VISUAL FALLBACK v5.0 - 2.10.2026. ===
  * Chrome/Firefox/Brave: Web Audio analyses the existing player.
- * Safari: the server sends real L/R levels and a short measurement history.
- * The Safari path measures its own playback buffer and selects the server
- * measurement that belongs to the audio frame currently being heard.
+ * Safari: a lightweight visual fallback runs only while the existing player is
+ * playing. Safari does not expose usable PCM from this cross-origin live player,
+ * and a separate server analyser cannot share Safari's actual playback clock.
  * Neither path creates another Audio object or starts a second audio stream.
  */
 (function () {
   const RUNTIME_KEY = "RC_VU_HYBRID_RUNTIME";
   const LEGACY_RUNTIME_KEY = "RC_VU_EXISTING_PLAYER_RUNTIME";
   const GRAPH_KEY = "__rcVuExistingPlayerGraph";
-  const SERVER_EVENTS_URL = "https://live.radiocrash.net/vu/events";
-  const SERVER_HISTORY_URL = "https://live.radiocrash.net/vu/history";
   const DEBUG = false;
 
   const userAgent = navigator.userAgent || "";
@@ -444,7 +442,7 @@
     }
   });
 
-  // Do not initialize VU logic or the server connection on narrow/mobile views.
+  // Do not initialize VU logic on narrow/mobile views.
   if (window.matchMedia("(max-width: 900px)").matches) {
     const oldVu = document.getElementById("rc-vu-mini");
     if (oldVu) oldVu.remove();
@@ -453,6 +451,7 @@
 
   let active = false;
   let raf = null;
+  let fakeTimer = null;
   let syncTimer = null;
   let hookTimer = null;
   let safariReleaseToken = 0;
@@ -467,39 +466,25 @@
   let dataArrayR = null;
   let graphFailedFor = null;
 
-  let eventSource = null;
-  let historyController = null;
-  let historyRetryTimer = null;
-  let historyReady = false;
   let safariPlaybackReady = false;
-  let lastServerEventAt = 0;
-  let latestServerTime = 0;
-  let serverClockOffsetMs = 0;
-  let hasServerClockOffset = false;
-  let serverBufferSeconds = 1.1;
-  let serverSamples = [];
-  let bufferAheadReadings = [];
-  let bufferAheadSeconds = null;
-  let extraDelaySeconds = 0;
-  let lastBufferMeasureAt = 0;
-  let selectedServerSeq = 0;
-  let historyLoads = 0;
-  let adaptiveRenders = 0;
-  let targetL = 0;
-  let targetR = 0;
+  let fakeTargetL = 0;
+  let fakeTargetR = 0;
+  let fakeNextTargetAt = 0;
+  let fakeFrames = 0;
   let lastL = 0;
   let lastR = 0;
   let lastLocalRenderAt = 0;
-  let lastServerRenderAt = 0;
-  let serverLevelEvents = 0;
+  let lastFakeRenderAt = 0;
   const ledCache = { l: null, r: null };
   const renderedCount = { l: -1, r: -1 };
 
   // The original 0.3 per frame at 120 Hz equals 36 LED segments/s.
-  // Elapsed time, not browser/SSE frame count, determines decay speed.
+  // Elapsed time, not callback count, determines decay speed.
   const DECAY_PER_SECOND = 36;
   const MAX_DECAY_STEP_SECONDS = 0.1;
   const LOCAL_GAIN = 24;
+  const FAKE_ATTACK_PER_SECOND = 90;
+  const FAKE_DECAY_PER_SECOND = 42;
 
   function log(...args) {
     if (DEBUG) console.log("[RC VU]", ...args);
@@ -517,7 +502,7 @@
 
     const vu = document.createElement("div");
     vu.id = "rc-vu-mini";
-    vu.dataset.mode = IS_SAFARI ? "server-waiting" : "local-waiting";
+    vu.dataset.mode = IS_SAFARI ? "safari-fake-waiting" : "local-waiting";
     vu.innerHTML = `
       <div class="rc-vu-line">
         <span class="rc-vu-lbl">L</span>
@@ -579,14 +564,44 @@
   }
 
   function zeroLevels() {
-    targetL = 0;
-    targetR = 0;
     lastL = 0;
     lastR = 0;
     lastLocalRenderAt = 0;
-    lastServerRenderAt = 0;
+    lastFakeRenderAt = 0;
     setLevel("l", 0);
     setLevel("r", 0);
+  }
+
+  function chooseSafariFakeTarget(now) {
+    const shared = 4.5 + Math.random() * 6.5;
+    const accent = Math.random() > 0.86 ? 2 + Math.random() * 4 : 0;
+    fakeTargetL = Math.min(18, shared + accent + Math.random() * 1.8);
+    fakeTargetR = Math.min(18, shared + accent * 0.8 + Math.random() * 1.8 - 0.7);
+    fakeNextTargetAt = now + 35 + Math.random() * 70;
+  }
+
+  function moveToward(current, target, elapsedSeconds) {
+    const speed = target >= current ? FAKE_ATTACK_PER_SECOND : FAKE_DECAY_PER_SECOND;
+    const step = speed * Math.max(0, elapsedSeconds);
+    if (Math.abs(target - current) <= step) return target;
+    return current + Math.sign(target - current) * step;
+  }
+
+  function safariFakeFrame(now) {
+    if (!active || !IS_SAFARI) return;
+
+    const elapsedSeconds = lastFakeRenderAt
+      ? Math.min(MAX_DECAY_STEP_SECONDS, Math.max(0, (now - lastFakeRenderAt) / 1000))
+      : 1 / 60;
+    lastFakeRenderAt = now;
+
+    if (!fakeNextTargetAt || now >= fakeNextTargetAt) chooseSafariFakeTarget(now);
+    lastL = moveToward(lastL, fakeTargetL, elapsedSeconds);
+    lastR = moveToward(lastR, fakeTargetR, elapsedSeconds);
+    setLevel("l", lastL);
+    setLevel("r", lastR);
+    fakeFrames += 1;
+    setMode("safari-fake");
   }
 
   function getMainSound() {
@@ -615,7 +630,7 @@
     const sound = getMainSound();
     const audio = sound && sound._a;
 
-    // The Safari server feed may start only on the real HTMLMediaElement
+    // The Safari fallback may start only on the real HTMLMediaElement
     // "playing" event, not when SoundManager merely receives a Play command.
     if (IS_SAFARI) {
       return !!audio && safariPlaybackReady && !audio.paused && !audio.ended;
@@ -776,291 +791,6 @@
     return attachLocalAudio(getMainAudio());
   }
 
-  function dbToLedLevel(value) {
-    const db = Number(value);
-    if (!Number.isFinite(db) || db <= -96) return 0;
-
-    // Same calculation as the Chrome/Firefox/Brave path:
-    // dBFS -> linear RMS -> the existing gain of 24.
-    const linearRms = Math.pow(10, db / 20);
-    return Math.max(0, Math.min(18, linearRms * LOCAL_GAIN));
-  }
-
-  function renderSafariServerLevel() {
-    // Safari can throttle or pause requestAnimationFrame while EventSource still
-    // receives data normally. Rendering on each SSE event keeps the Chrome-like
-    // cadence: one new stereo measurement approximately every 8 ms.
-    const now = performance.now();
-    const elapsedSeconds = lastServerRenderAt
-      ? Math.min(MAX_DECAY_STEP_SECONDS, Math.max(0, (now - lastServerRenderAt) / 1000))
-      : 1 / 60;
-    lastServerRenderAt = now;
-    lastL = approachLevel(lastL, targetL, elapsedSeconds);
-    lastR = approachLevel(lastR, targetR, elapsedSeconds);
-    setLevel("l", lastL);
-    setLevel("r", lastR);
-  }
-
-  function normalizeServerSample(value) {
-    const sample = Array.isArray(value)
-      ? value
-      : [value && value.seq, value && value.serverTime, value && value.rmsDbL, value && value.rmsDbR];
-    const seq = Number(sample[0]);
-    const serverTime = Number(sample[1]);
-    const rmsDbL = Number(sample[2]);
-    const rmsDbR = Number(sample[3]);
-
-    if (![seq, serverTime, rmsDbL, rmsDbR].every(Number.isFinite)) return null;
-    return [seq, serverTime, rmsDbL, rmsDbR];
-  }
-
-  function trimServerSamples() {
-    if (serverSamples.length < 2) return;
-    const cutoff = serverSamples[serverSamples.length - 1][1] - 40000;
-    let first = 0;
-    while (first < serverSamples.length - 1 && serverSamples[first][1] < cutoff) first += 1;
-    if (first) serverSamples.splice(0, first);
-  }
-
-  function addLiveServerSample(value) {
-    const sample = normalizeServerSample(value);
-    if (!sample) return null;
-    const last = serverSamples[serverSamples.length - 1];
-
-    if (!last || sample[0] > last[0]) {
-      serverSamples.push(sample);
-    } else if (sample[0] === last[0]) {
-      serverSamples[serverSamples.length - 1] = sample;
-    } else if (!serverSamples.some(function (item) { return item[0] === sample[0]; })) {
-      serverSamples.push(sample);
-      serverSamples.sort(function (a, b) { return a[0] - b[0]; });
-    }
-
-    trimServerSamples();
-    return sample;
-  }
-
-  function mergeServerHistory(items) {
-    const bySequence = new Map();
-    serverSamples.forEach(function (sample) { bySequence.set(sample[0], sample); });
-    (Array.isArray(items) ? items : []).forEach(function (value) {
-      const sample = normalizeServerSample(value);
-      if (sample) bySequence.set(sample[0], sample);
-    });
-    serverSamples = Array.from(bySequence.values()).sort(function (a, b) { return a[0] - b[0]; });
-    trimServerSamples();
-  }
-
-  function measureSafariBuffer(force) {
-    const now = performance.now();
-    if (!force && now - lastBufferMeasureAt < 200) return bufferAheadSeconds;
-    lastBufferMeasureAt = now;
-
-    const audio = getMainAudio();
-    const ranges = audio && audio.buffered;
-    const currentTime = Number(audio && audio.currentTime);
-    if (!ranges || !Number.isFinite(currentTime) || !ranges.length) return bufferAheadSeconds;
-
-    let rangeEnd = null;
-    try {
-      for (let index = 0; index < ranges.length; index++) {
-        const start = Number(ranges.start(index));
-        const end = Number(ranges.end(index));
-        if (currentTime >= start - 0.25 && currentTime <= end + 0.25) {
-          rangeEnd = end;
-          break;
-        }
-      }
-    } catch (_) {
-      return bufferAheadSeconds;
-    }
-
-    const reading = Number(rangeEnd) - currentTime;
-    if (!Number.isFinite(reading) || reading < 0 || reading > 120) return bufferAheadSeconds;
-
-    bufferAheadReadings.push(reading);
-    if (bufferAheadReadings.length > 9) bufferAheadReadings.shift();
-    const ordered = bufferAheadReadings.slice().sort(function (a, b) { return a - b; });
-    bufferAheadSeconds = ordered[Math.floor(ordered.length / 2)];
-    extraDelaySeconds = Math.max(0, bufferAheadSeconds - serverBufferSeconds);
-    return bufferAheadSeconds;
-  }
-
-  function estimatedServerNow() {
-    // Advance from the timestamp in each received SSE packet, not its local
-    // arrival time. TCP may deliver several packets in one burst; the embedded
-    // timestamps preserve the original 120 Hz measurement cadence.
-    if (latestServerTime) return latestServerTime;
-    if (hasServerClockOffset) return Date.now() + serverClockOffsetMs;
-    return Date.now();
-  }
-
-  function sampleNearestTo(serverTime) {
-    if (!serverSamples.length) return null;
-    let low = 0;
-    let high = serverSamples.length;
-
-    while (low < high) {
-      const middle = (low + high) >> 1;
-      if (serverSamples[middle][1] < serverTime) low = middle + 1;
-      else high = middle;
-    }
-
-    if (low <= 0) return serverSamples[0];
-    if (low >= serverSamples.length) return serverSamples[serverSamples.length - 1];
-    const before = serverSamples[low - 1];
-    const after = serverSamples[low];
-    return serverTime - before[1] <= after[1] - serverTime ? before : after;
-  }
-
-  function renderAdaptiveSafariLevel() {
-    measureSafariBuffer(false);
-    const desiredServerTime = estimatedServerNow() - extraDelaySeconds * 1000;
-    const historyCoversTarget = !!(
-      serverSamples.length && desiredServerTime >= serverSamples[0][1] - 100
-    );
-    const sample = historyCoversTarget
-      ? sampleNearestTo(desiredServerTime)
-      : serverSamples[serverSamples.length - 1];
-    if (!sample || sample[0] === selectedServerSeq) return;
-
-    selectedServerSeq = sample[0];
-    targetL = dbToLedLevel(sample[2]);
-    targetR = dbToLedLevel(sample[3]);
-    adaptiveRenders += 1;
-    renderSafariServerLevel();
-    setMode(
-      bufferAheadSeconds !== null && historyCoversTarget
-        ? "server-adaptive"
-        : "server-real"
-    );
-  }
-
-  function loadServerHistory() {
-    if (
-      !IS_SAFARI ||
-      !active ||
-      historyReady ||
-      historyController ||
-      typeof fetch !== "function"
-    ) return;
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
-    const requestMarker = {
-      abort: function () { if (controller) controller.abort(); }
-    };
-    const requestStartedAt = performance.now();
-    historyController = requestMarker;
-
-    fetch(SERVER_HISTORY_URL, {
-      cache: "no-store",
-      credentials: "omit",
-      signal: controller ? controller.signal : undefined
-    }).then(function (response) {
-      if (!response.ok) throw new Error("VU history HTTP " + response.status);
-      return response.json();
-    }).then(function (payload) {
-      if (!active || historyController !== requestMarker) return;
-      const roundTripMs = performance.now() - requestStartedAt;
-      const generatedAt = Number(payload && payload.generatedAt);
-      const bufferSeconds = Number(payload && payload.bufferSeconds);
-      if (Number.isFinite(generatedAt)) {
-        serverClockOffsetMs = generatedAt - (Date.now() - roundTripMs / 2);
-        hasServerClockOffset = true;
-      }
-      if (Number.isFinite(bufferSeconds) && bufferSeconds >= 0) {
-        serverBufferSeconds = bufferSeconds;
-      }
-      mergeServerHistory(payload && payload.items);
-      historyLoads += 1;
-      historyReady = true;
-      historyController = null;
-      measureSafariBuffer(true);
-      renderAdaptiveSafariLevel();
-    }).catch(function (error) {
-      if (!error || error.name !== "AbortError") log("VU history unavailable; using live feed.", error);
-      if (historyController === requestMarker) historyController = null;
-      if (active && (!error || error.name !== "AbortError")) {
-        clearTimeout(historyRetryTimer);
-        historyRetryTimer = setTimeout(loadServerHistory, 2000);
-      }
-    });
-  }
-
-  function closeServerFeed() {
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
-    if (historyController) {
-      try { historyController.abort(); } catch (_) {}
-      historyController = null;
-    }
-    clearTimeout(historyRetryTimer);
-    historyRetryTimer = null;
-    historyReady = false;
-    lastServerEventAt = 0;
-    latestServerTime = 0;
-    hasServerClockOffset = false;
-    serverSamples = [];
-    bufferAheadReadings = [];
-    bufferAheadSeconds = null;
-    extraDelaySeconds = 0;
-    lastBufferMeasureAt = 0;
-    selectedServerSeq = 0;
-    lastServerRenderAt = 0;
-  }
-
-  function openServerFeed() {
-    if (!IS_SAFARI || !active || eventSource) return;
-    if (!("EventSource" in window)) {
-      setMode("server-unsupported");
-      return;
-    }
-
-    setMode("server-connecting");
-    const source = new EventSource(SERVER_EVENTS_URL);
-    eventSource = source;
-    loadServerHistory();
-
-    source.addEventListener("open", function () {
-      if (eventSource !== source) return;
-      setMode("server-real");
-    });
-
-    source.addEventListener("level", function (event) {
-      if (eventSource !== source || !active) return;
-
-      try {
-        const data = JSON.parse(event.data);
-        if (!data || data.online !== true) {
-          targetL = 0;
-          targetR = 0;
-          renderSafariServerLevel();
-          setMode("server-offline");
-          return;
-        }
-
-        const sample = addLiveServerSample(data);
-        if (!sample) return;
-        latestServerTime = sample[1];
-        serverLevelEvents += 1;
-        lastServerEventAt = Date.now();
-        renderAdaptiveSafariLevel();
-      } catch (error) {
-        log("Invalid VU SSE packet", error);
-      }
-    });
-
-    source.addEventListener("error", function () {
-      if (eventSource !== source) return;
-      targetL = 0;
-      targetR = 0;
-      renderSafariServerLevel();
-      setMode("server-reconnecting");
-      // EventSource reconnects itself; do not create a parallel connection.
-    });
-  }
-
   function observeMainAudio(audio) {
     if (!audio || observedAudio === audio) return;
 
@@ -1125,8 +855,7 @@
   }
 
   function approachLevel(current, target, elapsedSeconds) {
-    // Attack is immediate. Decay is time-normalized so 120 Hz Safari SSE and
-    // 120 Hz Brave/Chrome requestAnimationFrame have the same response.
+    // Attack is immediate. Decay is time-normalized across display rates.
     if (target >= current) return target;
     const seconds = Math.min(
       MAX_DECAY_STEP_SECONDS,
@@ -1170,7 +899,16 @@
     zeroLevels();
 
     if (IS_SAFARI) {
-      openServerFeed();
+      fakeTargetL = 0;
+      fakeTargetR = 0;
+      fakeNextTargetAt = 0;
+      clearInterval(fakeTimer);
+      // A timer is more reliable than requestAnimationFrame for this visual
+      // fallback when Safari throttles or occludes the tab.
+      fakeTimer = setInterval(function () {
+        safariFakeFrame(performance.now());
+      }, 32);
+      safariFakeFrame(performance.now());
     } else {
       resumeAudioContext();
       attachToExistingPlayer();
@@ -1182,28 +920,23 @@
   function stopVu() {
     active = false;
     cancelAnimationFrame(raf);
-    closeServerFeed();
+    clearInterval(fakeTimer);
+    fakeTimer = null;
+    fakeTargetL = 0;
+    fakeTargetR = 0;
+    fakeNextTargetAt = 0;
     zeroLevels();
-    setMode(IS_SAFARI ? "server-waiting" : "local-waiting");
+    setMode(IS_SAFARI ? "safari-fake-waiting" : "local-waiting");
   }
 
   function syncVuWithMainPlayer() {
     const audio = getMainAudio();
     observeMainAudio(audio);
 
-    if (IS_SAFARI && active && lastServerEventAt && Date.now() - lastServerEventAt > 2500) {
-      targetL = 0;
-      targetR = 0;
-      zeroLevels();
-      setMode("server-stale");
-    }
-
     if (isMainPlayerPlaying()) {
       if (!active) {
         startVu();
-      } else if (IS_SAFARI) {
-        openServerFeed();
-      } else if (!analyserL || mainAudio !== audio) {
+      } else if (!IS_SAFARI && (!analyserL || mainAudio !== audio)) {
         attachLocalAudio(audio);
       }
     } else if (active) {
@@ -1287,17 +1020,20 @@
 
   function onVisibilityChange() {
     if (document.visibilityState !== "visible") return;
-    if (!IS_SAFARI) resumeAudioContext();
+    if (!IS_SAFARI) {
+      resumeAudioContext();
+    }
     setTimeout(syncVuWithMainPlayer, 0);
   }
 
   function destroy() {
     active = false;
     cancelAnimationFrame(raf);
+    clearInterval(fakeTimer);
+    fakeTimer = null;
     clearInterval(syncTimer);
     clearInterval(hookTimer);
     safariReleaseToken += 1;
-    closeServerFeed();
     zeroLevels();
 
     document.removeEventListener("click", onDocumentClick, true);
@@ -1334,28 +1070,17 @@
 
   window[RUNTIME_KEY] = {
     destroy,
-    mode: IS_SAFARI ? "server-safari" : "local-browser",
+    mode: IS_SAFARI ? "safari-visual-fallback" : "local-browser",
     debugState: function () {
       return {
         active,
         safariPlaybackReady,
-        targetL,
-        targetR,
         lastL,
         lastR,
         renderedL: renderedCount.l,
         renderedR: renderedCount.r,
         safariStreamReleases,
-        serverLevelEvents,
-        historyLoads,
-        historyReady,
-        serverSamples: serverSamples.length,
-        bufferAheadSeconds,
-        serverBufferSeconds,
-        extraDelaySeconds,
-        selectedServerSeq,
-        adaptiveRenders,
-        serverClockOffsetMs: hasServerClockOffset ? serverClockOffsetMs : null
+        fakeFrames
       };
     }
   };
