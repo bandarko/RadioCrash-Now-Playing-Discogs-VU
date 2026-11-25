@@ -478,11 +478,13 @@
   const ledCache = { l: null, r: null };
   const renderedCount = { l: -1, r: -1 };
 
-  // The original 0.3 per frame at 120 Hz equals 36 LED segments/s.
-  // Elapsed time, not callback count, determines decay speed.
-  const DECAY_PER_SECOND = 36;
   const MAX_DECAY_STEP_SECONDS = 0.1;
-  const LOCAL_GAIN = 24;
+  const LOCAL_GAIN = 25; // Green and yellow sensitivity.
+  const LOCAL_YELLOW_MAX_LEDS = 14;
+  const LOCAL_RED_KNEE_RMS = 0.72;
+  const VU_SEGMENTS = 18;
+  const LOCAL_ATTACK_SECONDS = 0.035;
+  const LOCAL_RELEASE_SECONDS = 0.095;
   const FAKE_ATTACK_PER_SECOND = 90;
   const FAKE_DECAY_PER_SECOND = 42;
 
@@ -517,11 +519,11 @@
     document.body.appendChild(vu);
 
     vu.querySelectorAll(".rc-vu-leds").forEach(function (bar) {
-      for (let i = 0; i < 18; i++) {
+      for (let i = 0; i < VU_SEGMENTS; i++) {
         const led = document.createElement("span");
         led.className = "rc-vu-led";
-        if (i >= 11 && i < 14) led.classList.add("yellow");
-        if (i >= 14) led.classList.add("red");
+        if (i >= 11 && i < LOCAL_YELLOW_MAX_LEDS) led.classList.add("yellow");
+        if (i >= LOCAL_YELLOW_MAX_LEDS) led.classList.add("red");
         bar.appendChild(led);
       }
     });
@@ -854,14 +856,21 @@
     return Math.sqrt(sum / dataArray.length);
   }
 
+  function localLevelFromRms(rms) {
+    // Reserve the red segments for unusually strong short-window RMS levels.
+    if (rms <= LOCAL_RED_KNEE_RMS) {
+      return Math.min(LOCAL_YELLOW_MAX_LEDS, rms * LOCAL_GAIN);
+    }
+
+    const redFraction = (rms - LOCAL_RED_KNEE_RMS) / (1 - LOCAL_RED_KNEE_RMS);
+    return LOCAL_YELLOW_MAX_LEDS + redFraction * (VU_SEGMENTS - LOCAL_YELLOW_MAX_LEDS);
+  }
+
   function approachLevel(current, target, elapsedSeconds) {
-    // Attack is immediate. Decay is time-normalized across display rates.
-    if (target >= current) return target;
-    const seconds = Math.min(
-      MAX_DECAY_STEP_SECONDS,
-      Math.max(0, Number(elapsedSeconds) || 0)
-    );
-    return Math.max(target, current - DECAY_PER_SECOND * seconds);
+    // Smooth each channel independently using the time between frames.
+    const responseSeconds = target > current ? LOCAL_ATTACK_SECONDS : LOCAL_RELEASE_SECONDS;
+    const blend = 1 - Math.exp(-elapsedSeconds / responseSeconds);
+    return current + (target - current) * blend;
   }
 
   function frame() {
@@ -877,8 +886,8 @@
       analyserL.getByteTimeDomainData(dataArrayL);
       analyserR.getByteTimeDomainData(dataArrayR);
 
-      const measuredL = Math.max(0, Math.min(18, getRms(dataArrayL) * LOCAL_GAIN));
-      const measuredR = Math.max(0, Math.min(18, getRms(dataArrayR) * LOCAL_GAIN));
+      const measuredL = localLevelFromRms(getRms(dataArrayL));
+      const measuredR = localLevelFromRms(getRms(dataArrayR));
       lastL = approachLevel(lastL, measuredL, elapsedSeconds);
       lastR = approachLevel(lastR, measuredR, elapsedSeconds);
     } else {
