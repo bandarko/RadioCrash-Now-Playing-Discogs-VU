@@ -1,0 +1,25 @@
+name: Provjera CLAUDE.md
+
+# Codex i Claude moraju uvijek čitati iste upute.
+# AGENTS.md je jedini izvor uputa, a CLAUDE.md smije samo uključiti AGENTS.md.
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+jobs:
+  provjera:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: CLAUDE.md mora samo uključivati AGENTS.md
+        run: |
+          test -f AGENTS.md || { echo "::error::AGENTS.md nedostaje"; exit 1; }
+          test -f CLAUDE.md || { echo "::error::CLAUDE.md nedostaje"; exit 1; }
+          sadrzaj=$(grep -v '^[[:space:]]*$' CLAUDE.md | grep -v '^<!--.*-->$' || true)
+          if [ "$sadrzaj" != "@AGENTS.md" ]; then
+            echo "::error::CLAUDE.md smije sadržavati samo liniju @AGENTS.md. Upute pišu se u AGENTS.md."
+            exit 1
+          fi
+          echo "U redu: CLAUDE.md samo uključuje AGENTS.md."
